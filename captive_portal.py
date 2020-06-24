@@ -23,7 +23,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         "year" : datetime.datetime.now().year
     }
 
-    files = {
+    route_files = {
         "/index": os.path.join(PAGES_PATH, "index.html"),
         "/login": os.path.join(PAGES_PATH, "login.html"),
 
@@ -34,21 +34,26 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         "/js/popper.min.js": os.path.join(PAGES_PATH, "js/popper.min.js"),
         "/js/bootstrap.min.js": os.path.join(PAGES_PATH, "js/bootstrap.min.js")
     }
-    files_alias = {
+    route_files_cache = {}
+    route_alias = {
         "/": "/index"
     }
-    files_cache = {}
+
+    def get_route(self, name):
+        data = self.get_file(name);
+        return data
+
 
     def get_file(self, name):
-        if name in self.files_alias.keys():
-            name = self.files_alias[name]
-        if name in self.files_cache.keys():
-            return self.files_cache[name]
+        if name in self.route_alias.keys():
+            name = self.route_alias[name]
+        if name in self.route_files_cache.keys():
+            return self.route_files_cache[name]
         elif name in self.files.keys():
-            file = open(self.files[name])
-            self.files_cache[name] = self.replace_keys(file.read(), self.server_variables)
+            file = open(self.route_files[name])
+            self.route_files_cache[name] = self.replace_keys(file.read(), self.server_variables)
             file.close()
-            return self.files_cache[name]
+            return self.route_files_cache[name]
         return None
 
     def replace_keys(self, html, variables):
@@ -80,7 +85,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     '''
     def do_GET(self):
         # Get file
-        data = self.get_file(self.path)
+        data = self.get_route(self.path)
         if data == None :
             self.send_response(404)
             self.send_header("Content-type", "text/html")
