@@ -1,12 +1,11 @@
 #!/usr/bin/python
 import http.server
-import http.cookies
 import subprocess
 import cgi
 import os
 import datetime
 import binascii
-
+import re
 
 # These variables are used as settings
 PORT       = 9090         # the port in which the captive portal web server listens 
@@ -20,9 +19,35 @@ SSL_KEY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'key.pem
 # Custom certificate
 # openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365
 
-SESSION_COOKIE_NAME = "openItsMe"
-SESSION_COOKIE_SIZE = 32
 
+def runCommand(cmd):
+    return subprocess.run(cmd, shell=True, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+def getArpList():
+    # Get arp
+    result = runCommand('arp -a')
+    if result.returncode != 0:
+        return []
+    # Parse data
+    data = result.stdout.decode('utf-8')
+    data = re.findall(r"\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9A-Za-z]+:[0-9A-Za-z]+:[0-9A-Za-z]+:[0-9A-Za-z]+:[0-9A-Za-z]+:[0-9A-Za-z]+)\s+\[([^\]]*)\]", data)
+    devices = []
+    for device in data:
+        devices.append({
+            'ip' : device[0],
+            'mac' : device[1],
+            'interface' : device[2]
+        })
+    # Return data
+    return devices
+
+def getMacFromIp(ip):
+    devices = getArpList()
+    for device in devices:
+        #print(device['ip'] + ' : ' + device['ip'])
+        if device['ip'] == ip:
+            return device['mac']
+    return '00:00:00:00:00:00'
 
 # This it the HTTP server used by the the captive portal
 class CaptivePortal(http.server.BaseHTTPRequestHandler):
@@ -33,9 +58,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         "year" : datetime.datetime.now().year
     }
 
-    sessions = {
-
-    }
+    sessions = {}
 
     route = {
         #"/index": {"file": "index.html", "cached": False},
@@ -66,7 +89,6 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         # Check
         if name == '/login':
             self.session_update()
-            headers["Set-Cookie"] = SESSION_COOKIE_NAME + "=" + self._session["hash"] + "; path=/" # expires=Thu, 24-Jun-2021 19:07:39 GMT; Max-Age=31536000; 
 
         return data, headers;
 
@@ -122,54 +144,34 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         return "text/html"
 
     def session_init(self):
+        ip = self.client_address[0]
+        mac = getMacFromIp(ip)
         self._session = {
-            "cookies" : {}
+            "ip" : ip,
+            "mac" : mac
         }
-        # Load cookies
-        if "Cookie" in self.headers.keys():
-            sCookie = http.cookies.SimpleCookie()
-            sCookie.load(self.headers["Cookie"])
-            for key, obj in sCookie.items():
-                self._session["cookies"][key] = obj.value
-        # Check hash
-        now = datetime.datetime.now()
-        expiration = now + datetime.timedelta(hours=1)
-        shash = False
-        if SESSION_COOKIE_NAME in self._session["cookies"].keys():
-            shash = self._session["cookies"][SESSION_COOKIE_NAME]
-            if not ((shash in self.sessions.keys()) and (self.sessions[shash]["expiration"] > now)):
-                shash = False
-
-        self._session["hash"] = shash
+        if not (ip in self.sessions.keys()):
+            self.sessions[ip] = {
+                "ip" : ip,
+                "mac" : mac,
+                "authenticated" : False,
+                "expiration" : datetime.datetime.now() + datetime.timedelta(hours=1),
+                "data" : {}
+            }
         return
 
     def session_update(self):
-        # Check hash
-        now = datetime.datetime.now()
-        expiration = now + datetime.timedelta(hours=1)
-        shash = self._session["hash"]
-
-        if shash == False:
-            shash = binascii.b2a_hex(os.urandom(SESSION_COOKIE_SIZE)).decode("utf-8")
-            self.sessions[shash] = {
-                "authenticated" : False,
-                "expiration" : expiration,
-                "data" : {}
-            }
-        else:
-            self.sessions[shash]["expiration"] = expiration
-
-        self._session["hash"] = shash
-        self._session["expiration"] = expiration
+        ip = self._session["ip"]
+        self.sessions[ip]["expiration"] = datetime.datetime.now() + datetime.timedelta(hours=1)
         return
 
     def session_set(self, key, value):
         self._session = session
-        self.sessions[self._session["hash"]]["data"][key] = value
+        self.sessions[self._session["ip"]]["data"][key] = value
 
     def session_get(self, key, defvalue):
-        if key in self.sessions[self._session["hash"]]["data"].keys():
-            return self.sessions[self._session["hash"]]["data"][key]
+        if key in self.sessions[self._session["ip"]]["data"].keys():
+            return self.sessions[self._session["ip"]]["data"][key]
         else:
             return defvalue
     
