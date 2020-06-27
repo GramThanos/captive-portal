@@ -5,26 +5,28 @@
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 		<base href="/">
+		<meta http-equiv="Refresh" content="{{seconds}}; URL={{location}}">
 
 		<!-- Bootstrap CSS -->
 		<link rel="stylesheet" href="css/bootstrap.lumen.min.css">
 		<link rel="stylesheet" href="css/custom.css">
 
-		<title>Login</title>
+		<title>Redirect</title>
 	</head>
 	<body class="text-center">
-		<form class="form-signin">
+		<div class="form-signin">
 			<img class="mb-4" src="img/portal.png" alt="" width="72" height="72">
 
-			<h1 class="h3 mb-3 font-weight-normal">Please sign in</h1>
-			<a class="btn btn-lg btn-primary btn-full-width" href="{{facebook-link}}">Login with Facebook</a>
+			<h1 class="h3 mb-3 font-weight-normal">Redirect</h1>
+			{{message}}
 
 			<p class="mt-5 mb-3 text-muted">&copy; {{year}}</p>
-		</form>
+		</div>
 
 		<!-- JavaScript -->
 		<script src="js/jquery.min.js"></script>
 		<script src="js/popper.min.js"></script>
 		<script src="js/bootstrap.min.js"></script>
+		<script>setTimeout(function() {window.location = "{{location}}"}, {{seconds}} * 1000);</script>
 	</body>
 </html>

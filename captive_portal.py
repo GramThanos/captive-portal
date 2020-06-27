@@ -9,6 +9,8 @@ import re
 import threading
 import ssl
 import urllib
+import json
+import html
 
 # Server Information
 LOCAL_SERVER_IP = "192.168.20.1"
@@ -64,6 +66,14 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         "/js/popper.min.js": {"file": "js/popper.min.js", "cached": False},
         "/js/bootstrap.min.js": {"file": "js/bootstrap.min.js", "cached": False},
         "/img/portal.png": {"file": "img/portal.png", "cached": False},
+        "/img/portal-other.png": {"file": "img/portal-other.png", "cached": False},
+
+        # Facebook pages
+        "/facebook/success": {"file": "login_success.html", "cached": False},
+
+        # Other pages
+        ".redirect": {"file": "redirect.html", "cached": False},
+        ".message": {"file": "message.html", "cached": False},
     }
 
     route_alias = {
@@ -71,43 +81,108 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     }
 
     def get_route(self, rawUrl):
+        # Analise URL
         url = urllib.parse.urlparse(rawUrl)
         parms = urllib.parse.parse_qs(url.query)
         path = url.path
-        #print(parms['a'][0])
-        #print(parms.keys())
         # Check alias
         if path in self.route_alias.keys():
             path = self.route_alias[path]
-        print("url : " + rawUrl)
-        print("path : " + path)
         # Get file
         data = self.get_file(path);
         # Headers
         headers = {}
+        # Status
+        status = 200
 
-        # Check
+        # Print info
+        print("url : " + rawUrl)
+        print("path : " + path)
+
+        # Login Page
         if path == '/login':
             self.session_update()
-            data = self.replace_keys(data.decode("utf-8"), {
-                "facebook-link" : "https://www.facebook.com/v7.0/dialog/oauth?client_id=%s&redirect_uri=%s&state=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", "whatisup")
-            }).encode()
+            data = self.replace_keys_decode(data, {
+                "facebook-link" : "/facebook/init"
+            })
+
+        # Facebook - Pre-Oauth
+        elif path == '/facebook/init':
+            self.session_update()
+            fb_redirect = self.facebook_pre_oauth()
+            data, headers, status = self.do_redirect(fb_redirect, "<p>Redirecting to Facebook...</p>")
+        # Facebook - Post-Oauth
         elif path == '/facebook/oauth':
             self.session_update()
-            data = 'Works'
-            data = data.encode()
+            if ('code' in parms.keys()) and ('state' in parms.keys()):
+                fb_authcode = parms['code'][0]
+                fb_state = parms['state'][0]
+                error = self.facebook_post_oauth(fb_authcode, fb_state)
+                if error == None:
+                    data, headers, status = self.do_redirect("/facebook/success", "<p>Redirecting...</p>")
+                else:
+                    data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
+            else:
+                data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p>")
+        # Facebook - Login Success
+        elif path == '/facebook/success':
+            self.session_update()
+            fb_user_info = self.session_get("fb-user-info", None)
+            if (fb_user_info != None) and ("name" in fb_user_info.keys()):
+                data = self.replace_keys_decode(data, {
+                    "success-msg" : "<p>You are connected as </p><h2>%s</h2><p><small>(You now have Internet access)</small></p>" % (html.escape(fb_user_info["name"]))
+                })
+            # Redirect to login
+            else:
+                data, headers, status = self.do_redirect("/login", "<p>Redirecting to login...</p>")
 
-            conn = http.client.HTTPSConnection("graph.facebook.com")
-            conn.request("GET", "/v7.0/oauth/access_token?client_id=%s&redirect_uri=%s&client_secret=%s&code=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", SSO_FACEBOOK_APP_SECRET, "whatisup"))
-            res = conn.getresponse()
-            print(res.status)
-            print(res.reason)
-            response = res.read()
-            print(response)
-            conn.close()
-            # https://www.facebook.com/v7.0/dialog/oauth?client_id=1161336397564018&redirect_uri=https://captive.ddns.net/facebook/oauth&state=whatisup
+        return data, headers, status;
 
-        return data, headers;
+    def facebook_pre_oauth(self):
+        fb_state = binascii.b2a_hex(os.urandom(32)).decode("utf-8")
+        self.session_set("fb-access-token", None)
+        self.session_set("fb-user-info", None)
+        self.session_set("fb-state", fb_state)
+        self.session_set("fb-authorized", 0)
+        return "https://www.facebook.com/v7.0/dialog/oauth?client_id=%s&redirect_uri=%s&state=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", fb_state)
+
+    def facebook_post_oauth(self, fb_authcode, fb_state):
+        # Check state
+        if not (fb_state == self.session_get("fb-state", None)):
+            return "Invalid oauth state."
+        # Get Facebook access token
+        #print("https://graph.facebook.com" + ("/v7.0/oauth/access_token?client_id=%s&redirect_uri=%s&client_secret=%s&code=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", SSO_FACEBOOK_APP_SECRET, fb_authcode)))
+        conn = http.client.HTTPSConnection("graph.facebook.com")
+        conn.request("GET", "/v7.0/oauth/access_token?client_id=%s&redirect_uri=%s&client_secret=%s&code=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", SSO_FACEBOOK_APP_SECRET, fb_authcode))
+        res = conn.getresponse()
+        #print(type(res.status), res.status)
+        #print(type(res.reason), res.reason)
+        #if res.status != 200 or res.reason != "OK":
+        #    return "Invalid status was returned (%s,%s)." % (str(res.status), res.reason)
+        response = res.read()
+        conn.close()
+        # Parse response
+        fb_access_token = json.loads(response)
+        if not ("access_token" in fb_access_token.keys()):
+            return "Failed to get access token."
+        fb_access_token = fb_access_token["access_token"]
+        # Get user info
+        conn = http.client.HTTPSConnection("graph.facebook.com")
+        conn.request("GET", "/v7.0/me?fields=id,name,email&access_token=%s" % (fb_access_token))
+        res = conn.getresponse()
+        #if res.status != 200 or res.reason != "OK":
+        #    return "Invalid status was returned (%s,%s)." % (str(res.status), res.reason)
+        response = res.read()
+        conn.close()
+        fb_user_info = json.loads(response)
+        if not ("id" in fb_user_info.keys() and "name" in fb_user_info.keys()):
+            return "Failed to get user info."
+        # Save session data
+        self.session_set("fb-access-token", fb_access_token)
+        self.session_set("fb-user-info", fb_user_info)
+        self.session_set("fb-state", None)
+        self.session_set("fb-authorized", datetime.datetime.now() + datetime.timedelta(hours=1))
+        return None
 
     def get_file(self, name):
         # If route exists
@@ -130,8 +205,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         # If HTML
         name, ext = os.path.splitext(path)
         if ext == ".html":
-            data = self.replace_keys(data.decode("utf-8"), self.server_variables)
-            data = data.encode()
+            data = self.replace_keys_decode(data, self.server_variables)
         # Return file
         return data
 
@@ -139,6 +213,9 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         for name, value in variables.items():
             html = html.replace("{{" + name + "}}", str(value))
         return html
+
+    def replace_keys_decode(self, data, variables):
+        return self.replace_keys(data.decode("utf-8"), variables).encode()
 
     def get_content_type(self, ext):
         # Common files
@@ -183,7 +260,6 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         return
 
     def session_set(self, key, value):
-        self._session = session
         self.sessions[self._session["ip"]]["data"][key] = value
 
     def session_get(self, key, defvalue):
@@ -196,7 +272,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.session_init()
         # Get file
-        body, headers = self.get_route(self.path)
+        body, headers, status = self.get_route(self.path)
         if body == None :
             self.send_response(404)
             self.send_header("Content-type", "text/html")
@@ -206,7 +282,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         # Path info
         file_name, file_extension = os.path.splitext(self.path)
         # Create headers
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-type", self.get_content_type(file_extension))
         for key, value in headers.items():
             self.send_header(key, value)
@@ -238,7 +314,29 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         else:
             #show the login form
             self.wfile.write(self.html_login)
-        
+
+    def do_redirect(self, location, message, seconds = 0):
+        #status = 302
+        status = 200
+        headers = {"Location": location}
+        data = self.get_file(".redirect");
+        data = self.replace_keys_decode(data, {
+            "location" : location,
+            "message" : message,
+            "seconds" : str(seconds)
+        })
+        return data, headers, status;
+
+    def do_message(self, title, message):
+        status = 200
+        headers = {}
+        data = self.get_file(".message");
+        data = self.replace_keys_decode(data, {
+            "title" : title,
+            "message" : message
+        })
+        return data, headers, status;
+
     #the following function makes server produce no output
     #comment it out if you want to print diagnostic messages
     #def log_message(self, format, *args):
