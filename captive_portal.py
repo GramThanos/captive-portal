@@ -11,13 +11,14 @@ import ssl
 import urllib
 import json
 import html
+import socket
 
 # Server Information
 LOCAL_SERVER_IP = "192.168.20.1"
 HTTP_SERVER_PORT = 80
 HTTPS_SERVER_PORT = 443
 REMOTE_SERVER_DOMAIN = "captive.ddns.net"
-REMOTE_SERVER_IP = "213.16.145.248"
+REMOTE_SERVER_IP = socket.gethostbyname(REMOTE_SERVER_DOMAIN)
 # Interfaces
 INTERFACE_INPUT = "wlan0"
 INTERFACE_OUTPUT = "eth0"
@@ -37,6 +38,18 @@ SSL_KEY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'key.pem
 SSO_FACEBOOK_APP_ID = None
 SSO_FACEBOOK_APP_SECRET = None
 from sso_config import *
+
+# Exclude Facebook addresses
+SSO_FACEBOOK_EXCLUDE_DOMAINS = [
+    "facebook.com",
+    "www.facebook.com",
+    "static.xx.fbcdn.net"
+]
+SSO_FACEBOOK_EXCLUDE_IPS = []
+for domain in SSO_FACEBOOK_EXCLUDE_DOMAINS:
+    ip = socket.gethostbyname(domain)
+    if not (ip in SSO_FACEBOOK_EXCLUDE_IPS):
+        SSO_FACEBOOK_EXCLUDE_IPS.append(ip)
 
 # Create remotelink
 REMOTE_SERVER_LINK = "https://" + REMOTE_SERVER_DOMAIN + ":" + str(HTTPS_SERVER_PORT) + "/"
@@ -58,6 +71,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     route = {
         #"/index": {"file": "index.html", "cached": False},
         "/login": {"file": "login.html", "cached": False},
+        "/status": {"file": "login_success.html", "cached": False},
         "/favicon.ico": {"file": "favicon.ico", "cached": False},
         "/css/custom.css": {"file": "css/custom.css", "cached": False},
         "/css/bootstrap.min.css": {"file": "css/bootstrap.min.css", "cached": False},
@@ -102,9 +116,25 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         # Login Page
         if path == '/login':
             self.session_update()
-            data = self.replace_keys_decode(data, {
-                "facebook-link" : "/facebook/init"
-            })
+            # Check if logged in
+            loggedin = self.get_logged_type()
+            if loggedin == "Facebook":
+                data, headers, status = self.do_redirect("/status", "<p>Redirecting to login...</p>")
+            else:
+                data = self.replace_keys_decode(data, {
+                    "facebook-link" : "/facebook/init"
+                })
+        # Status page
+        elif path == '/status':
+            self.session_update()
+            # Check if logged in
+            loggedin = self.get_logged_type()
+            if loggedin == "Facebook":
+                data = self.replace_keys_decode(data, {
+                    "success-msg" : "<p>You are connected as </p><h2>%s</h2><p><small>(You have Internet access)</small></p>" % html.escape(self.facebook_get_user_name())
+                })
+            else:
+                data, headers, status = self.do_redirect("/login", "<p>Redirecting...</p>")
 
         # Facebook - Pre-Oauth
         elif path == '/facebook/init':
@@ -119,6 +149,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 fb_state = parms['state'][0]
                 error = self.facebook_post_oauth(fb_authcode, fb_state)
                 if error == None:
+                    self.authorize()
                     data, headers, status = self.do_redirect("/facebook/success", "<p>Redirecting...</p>")
                 else:
                     data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
@@ -127,10 +158,10 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         # Facebook - Login Success
         elif path == '/facebook/success':
             self.session_update()
-            fb_user_info = self.session_get("fb-user-info", None)
-            if (fb_user_info != None) and ("name" in fb_user_info.keys()):
+            loggedin = self.get_logged_type()
+            if loggedin == "Facebook":
                 data = self.replace_keys_decode(data, {
-                    "success-msg" : "<p>You are connected as </p><h2>%s</h2><p><small>(You now have Internet access)</small></p>" % (html.escape(fb_user_info["name"]))
+                    "success-msg" : "<p>You are connected as </p><h2>%s</h2><p><small>(You now have Internet access)</small></p>" % html.escape(self.facebook_get_user_name())
                 })
             # Redirect to login
             else:
@@ -138,12 +169,22 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
         return data, headers, status;
 
+    def get_logged_type(self):
+        date = self.session_get("authorized", datetime.datetime(1970, 1, 1))
+        if date > datetime.datetime.now():
+            date = self.session_get("fb-authorized", datetime.datetime(1970, 1, 1))
+            if date > datetime.datetime.now():
+                fb_user_info = self.session_get("fb-user-info", None)
+                if (fb_user_info != None) and ("name" in fb_user_info.keys()):
+                    return "Facebook"
+        return None
+
     def facebook_pre_oauth(self):
         fb_state = binascii.b2a_hex(os.urandom(32)).decode("utf-8")
         self.session_set("fb-access-token", None)
         self.session_set("fb-user-info", None)
         self.session_set("fb-state", fb_state)
-        self.session_set("fb-authorized", 0)
+        self.session_set("fb-authorized", datetime.datetime(1970, 1, 1))
         return "https://www.facebook.com/v7.0/dialog/oauth?client_id=%s&redirect_uri=%s&state=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", fb_state)
 
     def facebook_post_oauth(self, fb_authcode, fb_state):
@@ -183,6 +224,13 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         self.session_set("fb-state", None)
         self.session_set("fb-authorized", datetime.datetime.now() + datetime.timedelta(hours=1))
         return None
+
+    def facebook_get_user_id(self):
+        return self.session_get("fb-user-info", {"id":0})["id"]
+
+    def facebook_get_user_name(self):
+        return self.session_get("fb-user-info", {"name":"Unknown"})["name"]
+        
 
     def get_file(self, name):
         # If route exists
@@ -267,6 +315,12 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
             return self.sessions[self._session["ip"]]["data"][key]
         else:
             return defvalue
+
+    def authorize():
+        ip = self._session["ip"]
+        self.session_set("authorized", datetime.datetime.now() + datetime.timedelta(hours=1))
+        callCmd(["iptables", "-t", "nat", "-I", "PREROUTING", "1", "-s", ip, "-j" ,"ACCEPT"])
+        callCmd(["iptables",              "-I",    "FORWARD",      "-s", ip, "-j" ,"ACCEPT"])
     
     # Handle GET requests
     def do_GET(self):
@@ -292,28 +346,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     # Handle POST requests
     def do_POST(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        form = cgi.FieldStorage(
-            fp=self.rfile, 
-            headers=self.headers,
-            environ={'REQUEST_METHOD':'POST','CONTENT_TYPE':self.headers['Content-Type']}
-        )
-        username = form.getvalue("username")
-        password = form.getvalue("password")
-        #dummy security check
-        if username == 'nikos' and password == 'fotiou':
-            #authorized user
-            remote_IP = self.client_address[0]
-            print('New authorization from '+ remote_IP)
-            print('Updating IP tables')
-            subprocess.call(["iptables","-t", "nat", "-I", "PREROUTING","1", "-s", remote_IP, "-j" ,"ACCEPT"])
-            subprocess.call(["iptables", "-I", "FORWARD", "-s", remote_IP, "-j" ,"ACCEPT"])
-            self.wfile.write("You are now authorized. Navigate to any URL")
-        else:
-            #show the login form
-            self.wfile.write(self.html_login)
+        # To do
 
     def do_redirect(self, location, message, seconds = 0):
         #status = 302
@@ -454,11 +487,14 @@ def iptables_init():
         # Allow DNS
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", "53", "-j" , "ACCEPT"])
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", "53", "-j" , "ACCEPT"])
+        # Allow Facebook IPs
+        for ip in SSO_FACEBOOK_EXCLUDE_IPS:
+            callCmd(["iptables", "-A", "FORWARD", "-p", "tcp", "-d", ip, "-j" , "ACCEPT"])
         # Forward traffic to captive portal
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str( HTTP_SERVER_PORT), "-j", "ACCEPT"])
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str(HTTPS_SERVER_PORT), "-j", "ACCEPT"])
         # Block all other traffic
-        #callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-j" , "DROP"])
+        callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-j" , "DROP"])
         # Redirecting HTTP traffic to captive portal
         callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "tcp",                         "--dport", str( HTTP_SERVER_PORT), "-j", "DNAT", "--to-destination",  LOCAL_SERVER_IP + ":" + str( HTTP_SERVER_PORT)])
         callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING",                        "-p", "tcp", "-d", REMOTE_SERVER_IP, "--dport", str(HTTPS_SERVER_PORT), "-j", "DNAT", "--to-destination",  LOCAL_SERVER_IP + ":" + str(HTTPS_SERVER_PORT)])
