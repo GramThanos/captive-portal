@@ -2,6 +2,8 @@
 
 A captive portal based on Python3 and IPtables. This is based on @nikosft's implementation, is an improved version aiming at providing *security* and ease of access through *Single sign-on* (SSO).
 
+![img](https://raw.githubusercontent.com/GramThanos/captive-portal/master/pages/img/portal.png)
+
 ## Features
  - HTTPS Captive Portal using a No-IP domain and Let's encrypt SSL certificate
  - Facebook SSO login
