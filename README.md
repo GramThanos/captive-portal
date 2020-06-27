@@ -6,6 +6,15 @@ A captive portal based on Python3 and IPtables. This is based on @nikosft's impl
  - HTTPS Captive Portal using a No-IP domain and Let's encrypt SSL certificate
  - Facebook SSO login
  - Load HTML and assets from files (routes defined in the code)
+ 
+### ToDo
+ - Move configuration to other file
+ - Add deamon, to monitor authentications and deathentications
+    - Change access to Facebook's IP to temporal during login
+    - Monitor traffic during login (add cooldowns between unsuccessful logins)
+ - Monitor MAC address change
+ - Add DNS server to block IP-over-DNS
+ - Add other SSO services
 
 ## Set up
 
