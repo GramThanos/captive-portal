@@ -51,10 +51,13 @@ for domain in SSO_FACEBOOK_EXCLUDE_DOMAINS:
     if not (ip in SSO_FACEBOOK_EXCLUDE_IPS):
         SSO_FACEBOOK_EXCLUDE_IPS.append(ip)
 
-# Create remotelink
+# Create remote link
 REMOTE_SERVER_LINK = "https://" + REMOTE_SERVER_DOMAIN + ":" + str(HTTPS_SERVER_PORT) + "/"
 if str(HTTPS_SERVER_PORT) == "443":
     REMOTE_SERVER_LINK = "https://" + REMOTE_SERVER_DOMAIN + "/"
+
+
+# 
 
 
 # This it the HTTP server used by the the captive portal
@@ -71,7 +74,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     route = {
         #"/index": {"file": "index.html", "cached": False},
         "/login": {"file": "login.html", "cached": False},
-        "/status": {"file": "login_success.html", "cached": False},
+        "/status": {"file": "status.html", "cached": False},
         "/favicon.ico": {"file": "favicon.ico", "cached": False},
         "/css/custom.css": {"file": "css/custom.css", "cached": False},
         "/css/bootstrap.min.css": {"file": "css/bootstrap.min.css", "cached": False},
@@ -81,9 +84,6 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         "/js/bootstrap.min.js": {"file": "js/bootstrap.min.js", "cached": False},
         "/img/portal.png": {"file": "img/portal.png", "cached": False},
         "/img/portal-other.png": {"file": "img/portal-other.png", "cached": False},
-
-        # Facebook pages
-        "/facebook/success": {"file": "login_success.html", "cached": False},
 
         # Other pages
         ".redirect": {"file": "redirect.html", "cached": False},
@@ -117,21 +117,35 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         if path == '/login':
             self.session_update()
             # Check if logged in
-            loggedin = self.get_logged_type()
+            loggedin = self.get_logged_in()
             if loggedin == "Facebook":
-                data, headers, status = self.do_redirect("/status", "<p>Redirecting to login...</p>")
+                data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
             else:
                 data = self.replace_keys_decode(data, {
                     "facebook-link" : "/facebook/init"
                 })
+        # Logout page
+        if path == '/logout':
+            self.session_update()
+            self.set_logged_out()
+            data, headers, status = self.do_redirect("/", "<p>Logging out...</p>", 5)
         # Status page
         elif path == '/status':
             self.session_update()
+            info = getRuleFromIp(self._session["ip"])
+            if info == None:
+                info = {"packets" : 0, "bytes" : 0}
             # Check if logged in
-            loggedin = self.get_logged_type()
+            loggedin = self.get_logged_in()
             if loggedin == "Facebook":
                 data = self.replace_keys_decode(data, {
-                    "success-msg" : "<p>You are connected as </p><h2>%s</h2><p><small>(You have Internet access)</small></p>" % html.escape(self.facebook_get_user_name())
+                    "title" : "Connected",
+                    "name" : html.escape(self.facebook_get_user_name()),
+                    "login-type" : "Facebook Login",
+                    "packets" : format(info["packets"],',d'),
+                    "bytes" : bytes_sizeof_format(info["bytes"]),
+                    "refresh-link" : "/status",
+                    "logout-link" : "/logout"
                 })
             else:
                 data, headers, status = self.do_redirect("/login", "<p>Redirecting...</p>")
@@ -149,27 +163,16 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 fb_state = parms['state'][0]
                 error = self.facebook_post_oauth(fb_authcode, fb_state)
                 if error == None:
-                    self.authorize()
-                    data, headers, status = self.do_redirect("/facebook/success", "<p>Redirecting...</p>")
+                    self.authorize_internet()
+                    data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
                 else:
                     data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
             else:
                 data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p>")
-        # Facebook - Login Success
-        elif path == '/facebook/success':
-            self.session_update()
-            loggedin = self.get_logged_type()
-            if loggedin == "Facebook":
-                data = self.replace_keys_decode(data, {
-                    "success-msg" : "<p>You are connected as </p><h2>%s</h2><p><small>(You now have Internet access)</small></p>" % html.escape(self.facebook_get_user_name())
-                })
-            # Redirect to login
-            else:
-                data, headers, status = self.do_redirect("/login", "<p>Redirecting to login...</p>")
 
         return data, headers, status;
 
-    def get_logged_type(self):
+    def get_logged_in(self):
         date = self.session_get("authorized", datetime.datetime(1970, 1, 1))
         if date > datetime.datetime.now():
             date = self.session_get("fb-authorized", datetime.datetime(1970, 1, 1))
@@ -179,12 +182,20 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                     return "Facebook"
         return None
 
-    def facebook_pre_oauth(self):
-        fb_state = binascii.b2a_hex(os.urandom(32)).decode("utf-8")
+    def set_logged_out(self):
+        self.deauthorize_internet()
+        self.facebook_deoauth()
+
+    def facebook_deoauth(self):
         self.session_set("fb-access-token", None)
         self.session_set("fb-user-info", None)
-        self.session_set("fb-state", fb_state)
+        self.session_set("fb-state", None)
         self.session_set("fb-authorized", datetime.datetime(1970, 1, 1))
+
+    def facebook_pre_oauth(self):
+        self.facebook_deoauth()
+        fb_state = binascii.b2a_hex(os.urandom(32)).decode("utf-8")
+        self.session_set("fb-state", fb_state)
         return "https://www.facebook.com/v7.0/dialog/oauth?client_id=%s&redirect_uri=%s&state=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", fb_state)
 
     def facebook_post_oauth(self, fb_authcode, fb_state):
@@ -316,11 +327,18 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         else:
             return defvalue
 
-    def authorize():
+    def authorize_internet(self):
         ip = self._session["ip"]
         self.session_set("authorized", datetime.datetime.now() + datetime.timedelta(hours=1))
-        callCmd(["iptables", "-t", "nat", "-I", "PREROUTING", "1", "-s", ip, "-j" ,"ACCEPT"])
-        callCmd(["iptables",              "-I",    "FORWARD",      "-s", ip, "-j" ,"ACCEPT"])
+        # The nat rule has to be inserted under the captive's portal domain
+        callCmd(["iptables", "-t", "nat", "-I", "PREROUTING", "3", "-s", ip, "-j" ,"ACCEPT"])
+        callCmd(["iptables",              "-I",    "FORWARD", "1", "-s", ip, "-j" ,"ACCEPT"])
+
+    def deauthorize_internet(self):
+        ip = self._session["ip"]
+        self.session_set("authorized", datetime.datetime(1970, 1, 1))
+        callCmd(["iptables", "-t", "nat", "-D", "PREROUTING", "-s", ip, "-j" ,"ACCEPT"])
+        callCmd(["iptables",              "-D",    "FORWARD", "-s", ip, "-j" ,"ACCEPT"])
     
     # Handle GET requests
     def do_GET(self):
@@ -376,36 +394,75 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     #def log_message(self, format, *args):
     #    return
 
-# http://192.168.1.94/
-class RedirectPortal(http.server.BaseHTTPRequestHandler):
-    def do_handle(self):
-        #self.send_response(301)
-        #self.send_header("Content-type", "text/html")
-        #self.send_header("Location", "https://captive.ddns.net/")
-        #self.end_headers()
-        #body = '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Refresh" content="0; URL="https://captive.ddns.net/"></head><body>Redirecting ...<script>window.location = "https://captive.ddns.net/";</script></body></html>'
-        #self.wfile.write(body.encode())
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        body = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"></head><body style="text-align: center;"><br><br>Redirecting ...<br><a href="{{redirect-url}}">Click here if you are not reditected automaticaly.</a><script>setTimeout(function(){window.location="{{redirect-url}}"},{{timeout}});</script></body></html>'
-        body = self.replace_keys(body, {
-            "redirect-url": REMOTE_SERVER_LINK,
-            "timeout": str(2000),
-        })
-        self.wfile.write(body.encode())
 
-    def replace_keys(self, html, variables):
-        for name, value in variables.items():
-            html = html.replace("{{" + name + "}}", str(value))
-        return html
+
+''' HTTP Captive Portal
+-----------------------------------'''
+
+#class RedirectPortal(http.server.BaseHTTPRequestHandler):
+class RedirectPortal(CaptivePortal):
+    route = {
+        "/favicon.ico": {"file": "favicon.ico", "cached": False},
+        "/css/custom.css": {"file": "css/custom.css", "cached": False},
+        "/css/bootstrap.min.css": {"file": "css/bootstrap.min.css", "cached": False},
+        "/css/bootstrap.lumen.min.css": {"file": "css/bootstrap.lumen.min.css", "cached": False},
+        "/js/jquery.min.js": {"file": "js/jquery.min.js", "cached": False},
+        "/js/popper.min.js": {"file": "js/popper.min.js", "cached": False},
+        "/js/bootstrap.min.js": {"file": "js/bootstrap.min.js", "cached": False},
+        "/img/portal.png": {"file": "img/portal.png", "cached": False},
+        "/img/portal-other.png": {"file": "img/portal-other.png", "cached": False},
+
+        # Other pages
+        ".redirect": {"file": "redirect.html", "cached": False},
+        ".message": {"file": "message.html", "cached": False},
+    }
+
+    def get_route(self, rawUrl):
+        # Analise URL
+        url = urllib.parse.urlparse(rawUrl)
+        path = url.path
+        # Headers
+        headers = {}
+        # Status
+        status = 200
+
+        # Get file
+        data = self.get_file(path);
+
+        # If file not found
+        if data == None:
+            data, headers, status = self.do_redirect(REMOTE_SERVER_LINK, "<p>Redirecting to captive portal...</p>", 2)
+
+        return data, headers, status;
 
     # Handle GET requests
     def do_GET(self):
-        self.do_handle()
+        # Get file
+        body, headers, status = self.get_route(self.path)
+        if body == None :
+            self.send_response(404)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(str("404: file not found").encode())
+            return
+        # Path info
+        file_name, file_extension = os.path.splitext(self.path)
+        # Create headers
+        self.send_response(status)
+        self.send_header("Content-type", self.get_content_type(file_extension))
+        for key, value in headers.items():
+            self.send_header(key, value)
+        self.end_headers()
+        # Return file
+        self.wfile.write(body)
 
     def do_POST(self):
-        self.do_handle()
+        self.do_GET()
+
+
+
+''' Other Functions
+-----------------------------------'''
 
 # Run command
 def callCmd(cmd):
@@ -437,10 +494,49 @@ def getArpList():
 def getMacFromIp(ip):
     devices = getArpList()
     for device in devices:
-        #print(device['ip'] + ' : ' + device['ip'])
         if device['ip'] == ip:
             return device['mac']
     return '00:00:00:00:00:00'
+
+# List rules information
+def getRulesList():
+    # Get rules
+    result = runCmd('iptables -L FORWARD -n -v -x')
+    if result.returncode != 0:
+        return []
+    # Parse data
+    # 7609  2108649 ACCEPT     all  --  *      *       192.168.20.97        0.0.0.0/0
+    data = result.stdout.decode('utf-8')
+    data = re.findall(r"\s+(\d+)\s+(\d+)\s+ACCEPT\s+all\s+--\s+\*\s+\*\s+(\d+\.\d+\.\d+\.\d+)\s+0\.0\.0\.0\/0", data)
+    rules = []
+    for rule in data:
+        rules.append({
+            'packets' : int(rule[0]),
+            'bytes' : int(rule[1]),
+            'ip' : rule[2]
+        })
+    # Return data
+    return rules
+
+# Get Rule from IP
+def getRuleFromIp(ip):
+    rules = getRulesList()
+    for rule in rules:
+        if rule['ip'] == ip:
+            return rule
+    return None
+
+def bytes_sizeof_format(num, suffix='B'):
+    for unit in ['','K','M','G','T','P','E','Z']:
+        if abs(num) < 1024.0:
+            return "%3.1f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f%s%s" % (num, 'Y', suffix)
+
+
+
+''' Script Start Functions
+-----------------------------------'''
 
 # Start Server
 def start_server():
@@ -468,7 +564,6 @@ def server_https():
         pass
     server.server_close()
 
-# iptables
 def iptables_reset():
     if IPTABLES_RESET == True:
         print("[iptables] Reset")
@@ -490,24 +585,29 @@ def iptables_init():
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", "53", "-j" , "ACCEPT"])
         # Allow Facebook IPs
         for ip in SSO_FACEBOOK_EXCLUDE_IPS:
-            callCmd(["iptables", "-A", "FORWARD", "-p", "tcp", "-d", ip, "-j" , "ACCEPT"])
+            callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", ip, "--dport", str(443), "-j" , "ACCEPT"])
         # Forward traffic to captive portal
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str( HTTP_SERVER_PORT), "-j", "ACCEPT"])
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str(HTTPS_SERVER_PORT), "-j", "ACCEPT"])
         # Block all other traffic
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-j" , "DROP"])
-        # Redirecting HTTP traffic to captive portal
+        # Redirecting HTTPS traffic to captive portal (traffic towards the domain)
+        callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", REMOTE_SERVER_IP, "--dport", str(HTTPS_SERVER_PORT), "-j", "DNAT", "--to-destination",  LOCAL_SERVER_IP + ":" + str(HTTPS_SERVER_PORT)])
+        callCmd(["iptables", "-t", "nat", "-A", "POSTROUTING"                       , "-p", "tcp", "-d", LOCAL_SERVER_IP,  "--dport", str(HTTPS_SERVER_PORT), "-j", "SNAT",      "--to-source", REMOTE_SERVER_IP])
+        # Redirecting HTTP traffic to captive portal (all HTTP traffic)
         callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "tcp",                         "--dport", str( HTTP_SERVER_PORT), "-j", "DNAT", "--to-destination",  LOCAL_SERVER_IP + ":" + str( HTTP_SERVER_PORT)])
-        callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING",                        "-p", "tcp", "-d", REMOTE_SERVER_IP, "--dport", str(HTTPS_SERVER_PORT), "-j", "DNAT", "--to-destination",  LOCAL_SERVER_IP + ":" + str(HTTPS_SERVER_PORT)])
-        callCmd(["iptables", "-t", "nat", "-A", "POSTROUTING",                        "-p", "tcp", "-d", LOCAL_SERVER_IP,  "--dport", str(HTTPS_SERVER_PORT), "-j", "SNAT",      "--to-source", REMOTE_SERVER_IP])
 
-# Run script
+
+
+
+''' Script Start
+-----------------------------------'''
 if __name__ == '__main__':
     # Check if root
     if os.getuid() != 0:
         print("Need to run with root rights.")
     else:
-        # Set up ip tables
+        # Set up iptables
         iptables_reset()
         iptables_init()
         # Start Server
