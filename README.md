@@ -1,23 +1,57 @@
-# A captive portal that uses IPTABLES
+# Basic Secure Captive Portal
 
-## Introduction
-This is a very simple cpative portal that uses IPTABLES and python's BaseHTTPServer.
-When it is executed it blocks all traffic except DNS and redirects all HTTP
-traffic to a login page. When a user enters the correct credentials a new 
-IPTABLES entry is added and all the traffic originating from the IP address
-of that user is allowed.
+A captive portal based on Python3 and IPtables. This is based on @nikosft's implementation, is an improved version aiming at providing *security* and ease of access through *Single sign-on* (SSO).
+
+## Features
+ - HTTPS Captive Portal using a No-IP domain and Let's encrypt SSL certificate
+ - Facebook SSO login
+ - Load HTML and assets from files (routes defined in the code)
+
+## Set up
+
+### Clone repo
+Start by cloning the repository:
+```
+git clone https://github.com/GramThanos/captive-portal.git
+cd captive-portal
+```
+
+### Edit the configuration
+Edit the configuration on the top of `captive_portal.py`.
+
+First change the IP address of the server you are running the captive portal.
+```
+LOCAL_SERVER_IP = "192.168.20.1"
+```
+
+Set the domain to use for HTTPS (you will neet to have access to the SSL certificate and key of the domain)
+```
+REMOTE_SERVER_DOMAIN = "captive.ddns.net"
+```
+You will also need to copy the SSL certificate (as `cert.pem`) and the private key (as `key.pem`) of the domain at the same directory.
+For testing, you may create custom ones by running (add the domain when asked for `Common Name (e.g. server FQDN or YOUR name)`):
+```
+openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365
+```
+
+
+Then create and edit the configuration of your Facebook app
+```
+cp ./sso_config.example.py ./sso_config.py
+nano ./sso_config.py
+```
+Add your app id and secret.
+
 ## Using it
-It is highly recommended to flush IPTABLES before using this scipt. You
-can do that using the following commands
-
+You can launch the captive portal by running
 ```
-$ sudo iptables -F
-$ sudo iptables -t nat -F
+sudo python3 ./captive_portal.py
 ```
 
-Modify the `PORT`, `IFACE`, and `IP_ADDRESS` variables according to your needs.
-Moreover, if you plan to use this code for something more than proof of concept
-make user you modify the `dummy security check` at line 69 of the script.
+## About
 
-Run the script with su priviledges. The username and the password used in the
-provided script are `nikos` and `fotiou` respectively.
+This web page was developed as part of the "Web-based authentication on WLANs" project during the postgraduate program "Digital Systems Security"
+
+University of Piraeus, Department of Digital Systems, Digital Systems Security
+
+Authors: Athanasios Vasileios Grammatopoulos, George Zamanis, Sotirios Papadopoulos
