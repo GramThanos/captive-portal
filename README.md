@@ -18,6 +18,12 @@ A captive portal based on Python3 and IPtables. This is based on @nikosft's impl
  - Add DNS server to block IP-over-DNS
  - Add other SSO services
 
+## Preview
+
+![img](https://raw.githubusercontent.com/GramThanos/captive-portal/master/preview/login-page.jpg)
+![img](https://raw.githubusercontent.com/GramThanos/captive-portal/master/preview/status-page.jpg)
+![img](https://raw.githubusercontent.com/GramThanos/captive-portal/master/preview/logout-modal.jpg)
+
 ## Set up
 
 ### Clone repo
