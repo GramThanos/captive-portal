@@ -347,6 +347,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     # Handle POST requests
     def do_POST(self):
         # To do
+        pass
 
     def do_redirect(self, location, message, seconds = 0):
         #status = 302
