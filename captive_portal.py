@@ -331,7 +331,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         ip = self._session["ip"]
         self.session_set("authorized", datetime.datetime.now() + datetime.timedelta(hours=1))
         # The nat rule has to be inserted under the captive's portal domain
-        callCmd(["iptables", "-t", "nat", "-I", "PREROUTING", "3", "-s", ip, "-j" ,"ACCEPT"])
+        callCmd(["iptables", "-t", "nat", "-I", "PREROUTING", "2", "-s", ip, "-j" ,"ACCEPT"])
         callCmd(["iptables",              "-I",    "FORWARD", "1", "-s", ip, "-j" ,"ACCEPT"])
 
     def deauthorize_internet(self):
