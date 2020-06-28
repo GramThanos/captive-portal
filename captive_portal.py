@@ -12,6 +12,7 @@ import urllib
 import json
 import html
 import socket
+import dnslib
 
 
 
@@ -43,6 +44,11 @@ SSL_KEY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'key.pem
 SSO_FACEBOOK_APP_ID = None
 SSO_FACEBOOK_APP_SECRET = None
 from sso_config import *
+
+# Local DNS Server
+USE_CUSTOM_DNS_SERVER = True
+LOCAL_DNS_SERVER_IP = LOCAL_SERVER_IP
+DNS_SERVER_PORT = 53
 
 # Exclude Facebook addresses
 SSO_FACEBOOK_EXCLUDE_DOMAINS = [
@@ -767,12 +773,10 @@ def iptables_init():
     if IPTABLES_INIT == True:
         print("[iptables] Initialize")
         # Allow DNS
-        callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", "53", "-j" , "ACCEPT"])
-        callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", "53", "-j" , "ACCEPT"])
-        # Allow Facebook IPs
-        #for ip in SSO_FACEBOOK_EXCLUDE_IPS:
-        #    callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", ip, "--dport", str(443), "-j" , "ACCEPT"])
-        # Forward traffic to captive portal
+        if not USE_CUSTOM_DNS_SERVER:
+            callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", "53", "-j" , "ACCEPT"])
+            callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", "53", "-j" , "ACCEPT"])
+        # Allow traffic to captive portal
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str( HTTP_SERVER_PORT), "-j", "ACCEPT"])
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str(HTTPS_SERVER_PORT), "-j", "ACCEPT"])
         # Block all other traffic
@@ -782,6 +786,10 @@ def iptables_init():
         callCmd(["iptables", "-t", "nat", "-A", "POSTROUTING"                       , "-p", "tcp", "-d", LOCAL_SERVER_IP,  "--dport", str(HTTPS_SERVER_PORT), "-j", "SNAT",      "--to-source", REMOTE_SERVER_IP])
         # Redirecting HTTP traffic to captive portal (all HTTP traffic)
         callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "tcp",                         "--dport", str( HTTP_SERVER_PORT), "-j", "DNAT", "--to-destination",  LOCAL_SERVER_IP + ":" + str( HTTP_SERVER_PORT)])
+        # Forward DNS traffic to local DNS
+        if USE_CUSTOM_DNS_SERVER:
+            callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", str(53), "-j", "DNAT", "--to-destination",  LOCAL_DNS_SERVER_IP + ":" + str(DNS_SERVER_PORT)])
+            callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", str(53), "-j", "DNAT", "--to-destination",  LOCAL_DNS_SERVER_IP + ":" + str(DNS_SERVER_PORT)])
 
 # Start Monitor Daemon
 def start_auth_daemon():
