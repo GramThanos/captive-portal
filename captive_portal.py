@@ -13,6 +13,11 @@ import json
 import html
 import socket
 
+
+
+''' Configuration
+-----------------------------------'''
+
 # Server Information
 LOCAL_SERVER_IP = "192.168.20.1"
 HTTP_SERVER_PORT = 80
@@ -56,9 +61,197 @@ REMOTE_SERVER_LINK = "https://" + REMOTE_SERVER_DOMAIN + ":" + str(HTTPS_SERVER_
 if str(HTTPS_SERVER_PORT) == "443":
     REMOTE_SERVER_LINK = "https://" + REMOTE_SERVER_DOMAIN + "/"
 
+# Authorizations Daemon
+AUTHDAEMON_INTERVAL_CHECK = 10
 
-# 
+# Access Times
+ACCESS_TIME_INTERNET = 2*60*60
+ACCESS_TIME_FACEBOOK_LOGIN = 2*60
 
+
+''' Authorizations Monitor Daemon
+-----------------------------------'''
+authDaemon = None
+class AuthorizationsDaemon:
+    def __init__(self):
+        self.authorizations = {}
+        self.clients = {}
+        self.sessions = []
+        self.ip_sessions = {}
+
+    def runChecks(self):
+        self.checkExpiredSessions()
+        self.checkMacBindings()
+
+    def checkExpiredSessions(self):
+        now = datetime.datetime.now()
+        expired = []
+        for session in self.sessions:
+            if session["expiration"] < now:
+                expired.append(session)
+        # Revoke authorization on expired session
+        self.deauthorizeSessions(expired)
+
+    def checkMacBindings(self):
+        now = datetime.datetime.now()
+        clients = getArpList()
+        for client in clients:
+            ip = client["ip"]
+            mac = client["mac"]
+            # If client was previously logged
+            if ip in self.clients.keys() and self.clients[ip]["mac"] != None:
+                # Check if MAC matches previous MAC
+                if self.clients[ip]["mac"] != mac:
+                    self.log("MAC change detected on " + ip + " : " + self.clients[ip]["mac"] + " --> " + mac)
+                    # De-authorize client
+                    self.clients[ip]["mac"] = None
+                    self.clients[ip]["logged"] = now
+                    self.deauthorizeIP_All(ip);
+            # Log user
+            else:
+                self.clients[ip] = {
+                    "mac" : mac,
+                    "logged" : now
+                }
+
+    def prepare_session(self, ip, stype, expiration):
+        session = {
+            "ip" : ip,
+            "mac" : getMacFromIp(ip),
+            "type" : stype,
+            "expiration" : expiration
+        }
+        return session
+
+    # Update Authorizations
+    def reauthorizeSession(self, session, seconds):
+        self.log("Update " + session["ip"] + " to " + session["type"])
+        session["expiration"] = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+
+    def reauthorizeSessions(self, sessions, seconds):
+        for session in sessions:
+            self.reauthorizeSession(session, seconds)
+
+
+    # Authorizations
+    def authorizeSession(self, session):
+        self.log("Authorize " + session["ip"] + " to " + session["type"])
+        self.sessions.append(session)
+        ip = session["ip"]
+        if not (ip in self.ip_sessions.keys()):
+            self.ip_sessions[ip] = []
+        self.ip_sessions[ip].append(session)
+        # Allow access to Internet
+        if session["type"] == "Internet":
+            # The nat rule has to be inserted under the captive's portal domain
+            callCmd(["iptables", "-t", "nat", "-I", "PREROUTING", "2", "-s", ip, "-j" ,"ACCEPT"])
+            callCmd(["iptables",              "-I",    "FORWARD", "1", "-s", ip, "-j" ,"ACCEPT"])
+        # Allow access to Facebook
+        elif session["type"] == "Facebook-Login":
+            # Allow Facebook IPs
+            for ip_addresses in SSO_FACEBOOK_EXCLUDE_IPS:
+                callCmd(["iptables", "-I", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-s", ip, "-d", ip_addresses, "--dport", str(443), "-j" , "ACCEPT"])
+        # Update client info
+        self.setClientAuthorizations(ip, session["type"], True)
+
+    def authorizeSessions(self, sessions):
+        for session in sessions:
+            self.authorizeSession(self, session)
+
+    def authorizeIP_Internet(self, ip, seconds):
+        sessions = self.getSessionsByIP(ip, "Internet")
+        if len(sessions) > 0:
+            self.reauthorizeSessions(sessions, seconds)
+        else:
+            session = self.prepare_session(ip, "Internet", datetime.datetime.now() + datetime.timedelta(seconds=seconds))
+            self.authorizeSession(session)
+
+    def authorizeIP_FacebookLogin(self, ip, seconds):
+        sessions = self.getSessionsByIP(ip, "Facebook-Login")
+        if len(sessions) > 0:
+            self.reauthorizeSessions(sessions, seconds)
+        else:
+            session = self.prepare_session(ip, "Facebook-Login", datetime.datetime.now() + datetime.timedelta(seconds=seconds))
+            self.authorizeSession(session)
+
+
+    # De-authorizations
+    def deauthorizeSession(self, session):
+        self.log("De-authorize " + session["ip"] + " from " + session["type"])
+        self.sessions.remove(session)
+        ip = session["ip"]
+        if ip in self.ip_sessions.keys():
+            self.ip_sessions[ip].remove(session)
+        # Block access to Internet
+        if session["type"] == "Internet":
+            callCmd(["iptables", "-t", "nat", "-D", "PREROUTING", "-s", ip, "-j" ,"ACCEPT"])
+            callCmd(["iptables",              "-D",    "FORWARD", "-s", ip, "-j" ,"ACCEPT"])
+        # Block access to Facebook
+        elif session["type"] == "Facebook-Login":
+            # Allow Facebook IPs
+            for ip_addresses in SSO_FACEBOOK_EXCLUDE_IPS:
+                callCmd(["iptables", "-D", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-s", ip, "-d", ip_addresses, "--dport", str(443), "-j" , "ACCEPT"])
+        # Update client info
+        self.setClientAuthorizations(ip, session["type"], False)
+
+    def deauthorizeSessions(self, sessions):
+        for session in sessions:
+            self.deauthorizeSession(session)
+
+    def deauthorizeIP_Internet(self, ip):
+        session = self.getSessionsByIP(ip, "Internet")
+        self.deauthorizeSessions(session)
+
+    def deauthorizeIP_FacebookLogin(self, ip):
+        session = self.getSessionsByIP(ip, "Facebook-Login")
+        self.deauthorizeSessions(session)
+
+    def deauthorizeIP_All(self, ip):
+        session = self.getSessionsByIP(ip)
+        self.deauthorizeSessions(session)
+
+
+    # Client info
+    def getClientAuthorizations(self, ip):
+        if not (ip in self.authorizations.keys()):
+            self.authorizations[ip] = {
+                "Internet" : False,
+                "Facebook-Login" : False
+            }
+        return self.authorizations[ip]
+
+    def setClientAuthorizations(self, ip, stype, value):
+        self.getClientAuthorizations(ip)
+        self.authorizations[ip][stype] = value
+    
+    def hasClientAuthorization(self, ip, stype):
+        info = self.getClientAuthorizations(ip);
+        if stype in self.authorizations[ip].keys():
+            return self.authorizations[ip][stype]
+        return False
+
+    def hasClient_Internet(self, ip):
+        return self.hasClientAuthorization(ip, "Internet")
+
+
+    # Other function
+    def getSessionsByIP(self, ip, stype=None):
+        sessions = []
+        if ip in self.ip_sessions.keys():
+            for session in self.ip_sessions[ip]:
+                if stype == None or stype == session["type"]:
+                    sessions.append(session)
+        return sessions
+
+    def log(self, message):
+        print("[AuthDaemon] " + message)
+
+
+            
+
+
+''' HTTPS Captive Portal (Main Captive Portal)
+-----------------------------------'''
 
 # This it the HTTP server used by the the captive portal
 class CaptivePortal(http.server.BaseHTTPRequestHandler):
@@ -110,12 +303,11 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         status = 200
 
         # Print info
-        print("url : " + rawUrl)
-        print("path : " + path)
+        #print("url : " + rawUrl)
+        #print("path : " + path)
 
         # Login Page
         if path == '/login':
-            self.session_update()
             # Check if logged in
             loggedin = self.get_logged_in()
             if loggedin == "Facebook":
@@ -126,12 +318,10 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 })
         # Logout page
         if path == '/logout':
-            self.session_update()
             self.set_logged_out()
             data, headers, status = self.do_redirect("/", "<p>Logging out...</p>", 5)
         # Status page
         elif path == '/status':
-            self.session_update()
             info = getRuleFromIp(self._session["ip"])
             if info == None:
                 info = {"packets" : 0, "bytes" : 0}
@@ -152,34 +342,33 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
         # Facebook - Pre-Oauth
         elif path == '/facebook/init':
-            self.session_update()
             fb_redirect = self.facebook_pre_oauth()
-            data, headers, status = self.do_redirect(fb_redirect, "<p>Redirecting to Facebook...</p>")
+            data, headers, status = self.do_redirect(fb_redirect, "<p>You have %d seconds to sign in...</p>" % ACCESS_TIME_FACEBOOK_LOGIN, 5)
         # Facebook - Post-Oauth
         elif path == '/facebook/oauth':
-            self.session_update()
+            fb_authcode = ''
+            fb_state = ''
             if ('code' in parms.keys()) and ('state' in parms.keys()):
                 fb_authcode = parms['code'][0]
                 fb_state = parms['state'][0]
-                error = self.facebook_post_oauth(fb_authcode, fb_state)
-                if error == None:
-                    self.authorize_internet()
-                    data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
-                else:
-                    data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
+            error = self.facebook_post_oauth(fb_authcode, fb_state)
+            if error == None:
+                self.authorize_internet()
+                data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
             else:
-                data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p>")
+                data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
 
         return data, headers, status;
 
     def get_logged_in(self):
-        date = self.session_get("authorized", datetime.datetime(1970, 1, 1))
-        if date > datetime.datetime.now():
-            date = self.session_get("fb-authorized", datetime.datetime(1970, 1, 1))
+        if self.session_hasInternet():
+            date = self.session_get("authorized", datetime.datetime(1970, 1, 1))
             if date > datetime.datetime.now():
-                fb_user_info = self.session_get("fb-user-info", None)
-                if (fb_user_info != None) and ("name" in fb_user_info.keys()):
-                    return "Facebook"
+                date = self.session_get("fb-authorized", datetime.datetime(1970, 1, 1))
+                if date > datetime.datetime.now():
+                    fb_user_info = self.session_get("fb-user-info", None)
+                    if (fb_user_info != None) and ("name" in fb_user_info.keys()):
+                        return "Facebook"
         return None
 
     def set_logged_out(self):
@@ -194,11 +383,13 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     def facebook_pre_oauth(self):
         self.facebook_deoauth()
+        authDaemon.authorizeIP_FacebookLogin(self._session["ip"], ACCESS_TIME_FACEBOOK_LOGIN)
         fb_state = binascii.b2a_hex(os.urandom(32)).decode("utf-8")
         self.session_set("fb-state", fb_state)
         return "https://www.facebook.com/v7.0/dialog/oauth?client_id=%s&redirect_uri=%s&state=%s" % (SSO_FACEBOOK_APP_ID, REMOTE_SERVER_LINK + "facebook/oauth", fb_state)
 
     def facebook_post_oauth(self, fb_authcode, fb_state):
+        authDaemon.deauthorizeIP_FacebookLogin(self._session["ip"])
         # Check state
         if not (fb_state == self.session_get("fb-state", None)):
             return "Invalid oauth state."
@@ -233,7 +424,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         self.session_set("fb-access-token", fb_access_token)
         self.session_set("fb-user-info", fb_user_info)
         self.session_set("fb-state", None)
-        self.session_set("fb-authorized", datetime.datetime.now() + datetime.timedelta(hours=1))
+        self.session_set("fb-authorized", datetime.datetime.now() + datetime.timedelta(seconds=ACCESS_TIME_INTERNET))
         return None
 
     def facebook_get_user_id(self):
@@ -298,25 +489,23 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     def session_init(self):
         ip = self.client_address[0]
-        mac = getMacFromIp(ip)
+        #mac = getMacFromIp(ip)
         self._session = {
             "ip" : ip,
-            "mac" : mac
+            #"mac" : mac
         }
         if not (ip in self.sessions.keys()):
             self.sessions[ip] = {
                 "ip" : ip,
-                "mac" : mac,
-                "authenticated" : False,
-                "expiration" : datetime.datetime.now() + datetime.timedelta(hours=1),
+                #"mac" : mac,
                 "data" : {}
             }
         return
 
-    def session_update(self):
-        ip = self._session["ip"]
-        self.sessions[ip]["expiration"] = datetime.datetime.now() + datetime.timedelta(hours=1)
-        return
+    def session_hasInternet(self):
+        if authDaemon.hasClient_Internet(self._session["ip"]) == False:
+            return False
+        return True
 
     def session_set(self, key, value):
         self.sessions[self._session["ip"]]["data"][key] = value
@@ -329,16 +518,13 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     def authorize_internet(self):
         ip = self._session["ip"]
-        self.session_set("authorized", datetime.datetime.now() + datetime.timedelta(hours=1))
-        # The nat rule has to be inserted under the captive's portal domain
-        callCmd(["iptables", "-t", "nat", "-I", "PREROUTING", "2", "-s", ip, "-j" ,"ACCEPT"])
-        callCmd(["iptables",              "-I",    "FORWARD", "1", "-s", ip, "-j" ,"ACCEPT"])
+        self.session_set("authorized", datetime.datetime.now() + datetime.timedelta(seconds=ACCESS_TIME_INTERNET))
+        authDaemon.authorizeIP_Internet(self._session["ip"], ACCESS_TIME_INTERNET)
 
     def deauthorize_internet(self):
         ip = self._session["ip"]
         self.session_set("authorized", datetime.datetime(1970, 1, 1))
-        callCmd(["iptables", "-t", "nat", "-D", "PREROUTING", "-s", ip, "-j" ,"ACCEPT"])
-        callCmd(["iptables",              "-D",    "FORWARD", "-s", ip, "-j" ,"ACCEPT"])
+        authDaemon.deauthorizeIP_All(self._session["ip"])
     
     # Handle GET requests
     def do_GET(self):
@@ -391,8 +577,8 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     #the following function makes server produce no output
     #comment it out if you want to print diagnostic messages
-    #def log_message(self, format, *args):
-    #    return
+    def log_message(self, format, *args):
+        return
 
 
 
@@ -584,8 +770,8 @@ def iptables_init():
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", "53", "-j" , "ACCEPT"])
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", "53", "-j" , "ACCEPT"])
         # Allow Facebook IPs
-        for ip in SSO_FACEBOOK_EXCLUDE_IPS:
-            callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", ip, "--dport", str(443), "-j" , "ACCEPT"])
+        #for ip in SSO_FACEBOOK_EXCLUDE_IPS:
+        #    callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", ip, "--dport", str(443), "-j" , "ACCEPT"])
         # Forward traffic to captive portal
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str( HTTP_SERVER_PORT), "-j", "ACCEPT"])
         callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-d", LOCAL_SERVER_IP, "--dport", str(HTTPS_SERVER_PORT), "-j", "ACCEPT"])
@@ -597,6 +783,16 @@ def iptables_init():
         # Redirecting HTTP traffic to captive portal (all HTTP traffic)
         callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "tcp",                         "--dport", str( HTTP_SERVER_PORT), "-j", "DNAT", "--to-destination",  LOCAL_SERVER_IP + ":" + str( HTTP_SERVER_PORT)])
 
+# Start Monitor Daemon
+def start_auth_daemon():
+    global authDaemon
+    print("[AuthDaemon] Start Authorizations Daemon")
+    authDaemon = AuthorizationsDaemon()
+    auth_daemon_interval()
+
+def auth_daemon_interval():
+    threading.Timer(AUTHDAEMON_INTERVAL_CHECK, auth_daemon_interval).start()
+    authDaemon.runChecks()
 
 
 
@@ -610,5 +806,7 @@ if __name__ == '__main__':
         # Set up iptables
         iptables_reset()
         iptables_init()
+        # Monitor Daemon
+        start_auth_daemon()
         # Start Server
         start_server()
