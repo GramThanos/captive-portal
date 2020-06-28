@@ -18,7 +18,9 @@
 			<img class="mb-4" src="img/portal.png" alt="" width="72" height="72">
 
 			<h1 class="h3 mb-3 font-weight-normal">Redirect</h1>
-			{{message}}
+			{{message}}<br>
+			<br>
+			<span id="redirect-info" style="display: none;"></span>
 
 			<p class="mt-5 mb-3 text-muted">&copy; {{year}}</p>
 		</div>
@@ -27,6 +29,17 @@
 		<script src="js/jquery.min.js"></script>
 		<script src="js/popper.min.js"></script>
 		<script src="js/bootstrap.min.js"></script>
-		<script>setTimeout(function() {window.location = "{{location}}"}, {{seconds}} * 1000);</script>
+		<script type="text/javascript">
+			setTimeout(function() {window.location = "{{location}}"}, {{seconds}} * 1000);
+			if ({{seconds}} > 2) {
+				var seconds = {{seconds}};
+				var info = document.getElementById('redirect-info');
+				info.style.display = "block";
+				setInterval(function () {
+					info.textContent = "Redirecting in " + seconds + " seconds..."
+					if (seconds > 0) seconds -= 1;
+				} , 1000)
+			}
+		</script>
 	</body>
 </html>
