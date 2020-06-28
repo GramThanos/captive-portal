@@ -11,7 +11,6 @@ A captive portal based on Python3 and IPtables. This is based on @nikosft's impl
  
 ### ToDo
  - Move configuration to other file
- - Add DNS server to block IP-over-DNS
  - Add other SSO services
  - Monitor traffic during login (add cooldowns between unsuccessful logins)
 
