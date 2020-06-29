@@ -74,6 +74,10 @@ AUTHDAEMON_INTERVAL_CHECK = 10
 ACCESS_TIME_INTERNET = 2*60*60
 ACCESS_TIME_FACEBOOK_LOGIN = 2*60
 
+LOG_DEBUG = 0
+LOG_VERBOSE = 2
+LOG_NORMAL = 4
+LOG_LEVEL = LOG_NORMAL
 
 ''' Authorizations Monitor Daemon
 -----------------------------------'''
@@ -249,8 +253,8 @@ class AuthorizationsDaemon:
                     sessions.append(session)
         return sessions
 
-    def log(self, message):
-        print("[AuthDaemon] " + message)
+    def log(self, message, level = LOG_LEVEL):
+        msgLog("AuthDaemon", message, level)
 
 
             
@@ -309,6 +313,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         status = 200
 
         # Print info
+        msgLog("Portal", "Request " + path, LOG_VERBOSE)
         #print("url : " + rawUrl)
         #print("path : " + path)
 
@@ -431,6 +436,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         self.session_set("fb-user-info", fb_user_info)
         self.session_set("fb-state", None)
         self.session_set("fb-authorized", datetime.datetime.now() + datetime.timedelta(seconds=ACCESS_TIME_INTERNET))
+        msgLog("Facebook", "Authorized Facebook user \"" + fb_user_info["name"] + "\" [#" + fb_user_info["id"] + "]")
         return None
 
     def facebook_get_user_id(self):
@@ -591,7 +597,6 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 ''' HTTP Captive Portal
 -----------------------------------'''
 
-#class RedirectPortal(http.server.BaseHTTPRequestHandler):
 class RedirectPortal(CaptivePortal):
     route = {
         "/favicon.ico": {"file": "favicon.ico", "cached": False},
@@ -736,7 +741,7 @@ def start_server():
     threading.Thread(target = server_https).start()
 
 def server_http():
-    print("[webserver] Start HTTP")
+    msgLog("WebServer", "Starting HTTP server")
     server = http.server.ThreadingHTTPServer(('', HTTP_SERVER_PORT), RedirectPortal)
     try:
         server.serve_forever()
@@ -745,7 +750,7 @@ def server_http():
     server.server_close()
 
 def server_https():
-    print("[webserver] Start HTTPS")
+    msgLog("WebServer", "Starting HTTPS server")
     #server = http.server.HTTPServer(('', 443), CaptivePortal)
     #server = http.server.ThreadingHTTPServer(('', 443), CaptivePortal)
     server = http.server.ThreadingHTTPServer(('', HTTPS_SERVER_PORT), CaptivePortal)
@@ -758,7 +763,7 @@ def server_https():
 
 def iptables_reset():
     if IPTABLES_RESET == True:
-        print("[iptables] Reset")
+        msgLog("iptables", "Reseting iptables")
         callCmd(["iptables", "-P", "INPUT", "ACCEPT"])
         callCmd(["iptables", "-P", "FORWARD", "ACCEPT"])
         callCmd(["iptables", "-P", "OUTPUT", "ACCEPT"])
@@ -771,7 +776,7 @@ def iptables_reset():
 
 def iptables_init():
     if IPTABLES_INIT == True:
-        print("[iptables] Initialize")
+        msgLog("iptables", "Initializing iptables")
         # Allow DNS
         if not USE_CUSTOM_DNS_SERVER:
             callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", "53", "-j" , "ACCEPT"])
@@ -794,7 +799,7 @@ def iptables_init():
 # Start Monitor Daemon
 def start_auth_daemon():
     global authDaemon
-    print("[AuthDaemon] Start Authorizations Daemon")
+    msgLog("AuthDaemon", "Start Authorizations Daemon")
     authDaemon = AuthorizationsDaemon()
     auth_daemon_interval()
 
@@ -802,6 +807,9 @@ def auth_daemon_interval():
     threading.Timer(AUTHDAEMON_INTERVAL_CHECK, auth_daemon_interval).start()
     authDaemon.runChecks()
 
+def msgLog(stype, message, level = LOG_NORMAL):
+    if level >= LOG_LEVEL:
+        print("[%s] %s" % (stype, message))
 
 
 ''' Script Start
@@ -809,7 +817,7 @@ def auth_daemon_interval():
 if __name__ == '__main__':
     # Check if root
     if os.getuid() != 0:
-        print("Need to run with root rights.")
+        msgLog("Portal", "Need to run with root rights")
     else:
         # Set up iptables
         iptables_reset()
