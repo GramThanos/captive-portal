@@ -13,6 +13,7 @@ import json
 import html
 import socket
 import dnslib
+import time
 
 
 
@@ -43,6 +44,8 @@ SSL_KEY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'key.pem
 # SSO (Configuration has to be inside the sso_config.py file)
 SSO_FACEBOOK_APP_ID = None
 SSO_FACEBOOK_APP_SECRET = None
+SSO_GOOGLE_CLIENT_ID = None
+SSO_GOOGLE_CLIENT_SECRET = None
 from sso_config import *
 
 # Local DNS Server
@@ -56,11 +59,25 @@ SSO_FACEBOOK_EXCLUDE_DOMAINS = [
     "www.facebook.com",
     "static.xx.fbcdn.net"
 ]
+SSO_GOOGLE_EXCLUDE_DOMAINS = [
+    "accounts.google.com",
+    "lh3.googleusercontent.com",
+    "fonts.gstatic.com",
+    "ssl.gstatic.com",
+    "accounts.youtube.com",
+    "play.google.com"
+]
+SSO_GOOGLE_EXCLUDE_IPS = []
 SSO_FACEBOOK_EXCLUDE_IPS = []
+# Turn domains to server IPs
 for domain in SSO_FACEBOOK_EXCLUDE_DOMAINS:
     ip = socket.gethostbyname(domain)
     if not (ip in SSO_FACEBOOK_EXCLUDE_IPS):
         SSO_FACEBOOK_EXCLUDE_IPS.append(ip)
+for domain in SSO_GOOGLE_EXCLUDE_DOMAINS:
+    ip = socket.gethostbyname(domain)
+    if not (ip in SSO_GOOGLE_EXCLUDE_IPS):
+        SSO_GOOGLE_EXCLUDE_IPS.append(ip)
 
 # Create remote link
 REMOTE_SERVER_LINK = "https://" + REMOTE_SERVER_DOMAIN + ":" + str(HTTPS_SERVER_PORT) + "/"
@@ -73,6 +90,7 @@ AUTHDAEMON_INTERVAL_CHECK = 10
 # Access Times
 ACCESS_TIME_INTERNET = 2*60*60
 ACCESS_TIME_FACEBOOK_LOGIN = 2*60
+ACCESS_TIME_GOOGLE_LOGIN = 2*60
 
 LOG_DEBUG = 0
 LOG_VERBOSE = 2
@@ -161,6 +179,11 @@ class AuthorizationsDaemon:
             # Allow Facebook IPs
             for ip_addresses in SSO_FACEBOOK_EXCLUDE_IPS:
                 callCmd(["iptables", "-I", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-s", ip, "-d", ip_addresses, "--dport", str(443), "-j" , "ACCEPT"])
+        # Allow access to Google
+        elif session["type"] == "Google-Login":
+            # Allow Google IPs
+            for ip_addresses in SSO_GOOGLE_EXCLUDE_IPS:
+                callCmd(["iptables", "-I", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-s", ip, "-d", ip_addresses, "--dport", str(443), "-j" , "ACCEPT"])
         # Update client info
         self.setClientAuthorizations(ip, session["type"], True)
 
@@ -184,6 +207,14 @@ class AuthorizationsDaemon:
             session = self.prepare_session(ip, "Facebook-Login", datetime.datetime.now() + datetime.timedelta(seconds=seconds))
             self.authorizeSession(session)
 
+    def authorizeIP_GoogleLogin(self, ip, seconds):
+        sessions = self.getSessionsByIP(ip, "Google-Login")
+        if len(sessions) > 0:
+            self.reauthorizeSessions(sessions, seconds)
+        else:
+            session = self.prepare_session(ip, "Google-Login", datetime.datetime.now() + datetime.timedelta(seconds=seconds))
+            self.authorizeSession(session)
+
 
     # De-authorizations
     def deauthorizeSession(self, session):
@@ -201,6 +232,11 @@ class AuthorizationsDaemon:
             # Allow Facebook IPs
             for ip_addresses in SSO_FACEBOOK_EXCLUDE_IPS:
                 callCmd(["iptables", "-D", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-s", ip, "-d", ip_addresses, "--dport", str(443), "-j" , "ACCEPT"])
+        # Block access to Google
+        elif session["type"] == "Google-Login":
+            # Allow Google IPs
+            for ip_addresses in SSO_GOOGLE_EXCLUDE_IPS:
+                callCmd(["iptables", "-D", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "-s", ip, "-d", ip_addresses, "--dport", str(443), "-j" , "ACCEPT"])
         # Update client info
         self.setClientAuthorizations(ip, session["type"], False)
 
@@ -216,6 +252,10 @@ class AuthorizationsDaemon:
         session = self.getSessionsByIP(ip, "Facebook-Login")
         self.deauthorizeSessions(session)
 
+    def deauthorizeIP_GoogleLogin(self, ip):
+        session = self.getSessionsByIP(ip, "Google-Login")
+        self.deauthorizeSessions(session)
+
     def deauthorizeIP_All(self, ip):
         session = self.getSessionsByIP(ip)
         self.deauthorizeSessions(session)
@@ -226,7 +266,8 @@ class AuthorizationsDaemon:
         if not (ip in self.authorizations.keys()):
             self.authorizations[ip] = {
                 "Internet" : False,
-                "Facebook-Login" : False
+                "Facebook-Login" : False,
+                "Google-Login" : False
             }
         return self.authorizations[ip]
 
@@ -321,11 +362,12 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         if path == '/login':
             # Check if logged in
             loggedin = self.get_logged_in()
-            if loggedin == "Facebook":
+            if loggedin == "Facebook" or loggedin == "Google":
                 data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
             else:
                 data = self.replace_keys_decode(data, {
-                    "facebook-link" : "/facebook/init"
+                    "facebook-link" : "/facebook/init",
+                    "google-link" : "/google/init"
                 })
         # Logout page
         if path == '/logout':
@@ -343,6 +385,16 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                     "title" : "Connected",
                     "name" : html.escape(self.facebook_get_user_name()),
                     "login-type" : "Facebook Login",
+                    "packets" : format(info["packets"],',d'),
+                    "bytes" : bytes_sizeof_format(info["bytes"]),
+                    "refresh-link" : "/status",
+                    "logout-link" : "/logout"
+                })
+            elif loggedin == "Google":
+                data = self.replace_keys_decode(data, {
+                    "title" : "Connected",
+                    "name" : html.escape(self.google_get_user_name()),
+                    "login-type" : "Google Login",
                     "packets" : format(info["packets"],',d'),
                     "bytes" : bytes_sizeof_format(info["bytes"]),
                     "refresh-link" : "/status",
@@ -369,6 +421,24 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
             else:
                 data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
 
+        # Google - Pre-Oauth
+        elif path == '/google/init':
+            gg_redirect = self.google_pre_oauth()
+            data, headers, status = self.do_redirect(gg_redirect, "<p>You have %d seconds to sign in...</p>" % ACCESS_TIME_GOOGLE_LOGIN, 5)
+        # Google - Post-Oauth
+        elif path == '/google/oauth':
+            gg_code = ''
+            gg_scope = ''
+            if ('code' in parms.keys()) and ('scope' in parms.keys()):
+                gg_code = parms['code'][0]
+                gg_scope = parms['scope'][0]
+            error = self.google_post_oauth(gg_code, gg_scope)
+            if error == None:
+                self.authorize_internet()
+                data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
+            else:
+                data, headers, status = self.do_message("Failed", "<p>Failed to login with Google</p><p><small>Error: %s</small></p>" % html.escape(error))
+
         return data, headers, status;
 
     def get_logged_in(self):
@@ -380,12 +450,19 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                     fb_user_info = self.session_get("fb-user-info", None)
                     if (fb_user_info != None) and ("name" in fb_user_info.keys()):
                         return "Facebook"
+                date = self.session_get("gg-authorized", datetime.datetime(1970, 1, 1))
+                if date > datetime.datetime.now():
+                    fb_user_info = self.session_get("gg-user-info", None)
+                    if (fb_user_info != None) and ("name" in fb_user_info.keys()):
+                        return "Google"
         return None
 
     def set_logged_out(self):
         self.deauthorize_internet()
         self.facebook_deoauth()
+        self.google_deoauth()
 
+    # Facebook Login
     def facebook_deoauth(self):
         self.session_set("fb-access-token", None)
         self.session_set("fb-user-info", None)
@@ -444,7 +521,82 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     def facebook_get_user_name(self):
         return self.session_get("fb-user-info", {"name":"Unknown"})["name"]
-        
+
+    # Google Login
+    def google_deoauth(self):
+        self.session_set("gg-access-token", None)
+        self.session_set("gg-refresh-token", None)
+        self.session_set("gg-user-info", None)
+        self.session_set("gg-code-verifier", None)
+        self.session_set("gg-authorized", datetime.datetime(1970, 1, 1))
+
+    def google_pre_oauth(self):
+        self.google_deoauth()
+        authDaemon.authorizeIP_GoogleLogin(self._session["ip"], ACCESS_TIME_GOOGLE_LOGIN)
+        gg_code_verifier = binascii.b2a_hex(os.urandom(32)).decode("utf-8")
+        self.session_set("gg-code-verifier", gg_code_verifier)
+        return "https://accounts.google.com/o/oauth2/v2/auth?client_id=%s&redirect_uri=%s&code_challenge=%s&response_type=code&scope=email profile" % (SSO_GOOGLE_CLIENT_ID, REMOTE_SERVER_LINK + "google/oauth", gg_code_verifier)
+
+    def google_post_oauth(self, gg_code, gg_scope):
+        authDaemon.deauthorizeIP_GoogleLogin(self._session["ip"])
+        # Check scope?
+        # Get code verifier
+        gg_code_verifier = self.session_get("gg-code-verifier", None)
+        if gg_code_verifier == None:
+            return "Invalid oauth code verifier."
+        # Wait
+        time.sleep(0.5)
+        # Get Google access token
+        conn = http.client.HTTPSConnection("oauth2.googleapis.com")
+        conn.request("POST", "/token", urllib.parse.urlencode({
+            "client_id" : SSO_GOOGLE_CLIENT_ID,
+            "client_secret" : SSO_GOOGLE_CLIENT_SECRET,
+            "code" : gg_code,
+            "code_verifier" : gg_code_verifier,
+            "grant_type" : "authorization_code",
+            "redirect_uri" : REMOTE_SERVER_LINK + "google/oauth",
+        }), {
+            "Content-type": "application/x-www-form-urlencoded",
+            #"Accept": "text/plain"
+        })
+        res = conn.getresponse()
+        #if res.status != 200 or res.reason != "OK":
+        #    return "Invalid status was returned (%s,%s)." % (str(res.status), res.reason)
+        response = res.read()
+        conn.close()
+        # Parse response
+        gg_data = json.loads(response)
+        if not ("access_token" in gg_data.keys()):
+            return "Failed to get access token."
+        gg_access_token = gg_data["access_token"]
+        #gg_refresh_token = gg_data["refresh_token"]
+        #gg_expire_in = gg_data["expires_in"]
+        # Get user info
+        conn = http.client.HTTPSConnection("www.googleapis.com")
+        conn.request("GET", "/oauth2/v2/userinfo?access_token=%s" % (gg_access_token))
+        res = conn.getresponse()
+        #if res.status != 200 or res.reason != "OK":
+        #    return "Invalid status was returned (%s,%s)." % (str(res.status), res.reason)
+        response = res.read()
+        conn.close()
+        gg_user_info = json.loads(response)
+        if not ("id" in gg_user_info.keys() and "name" in gg_user_info.keys()):
+            return "Failed to get user info."
+        # Save session data
+        self.session_set("gg-access-token", gg_access_token)
+        #self.session_set("gg-refresh-token", gg_refresh_token)
+        self.session_set("gg-user-info", gg_user_info)
+        self.session_set("gg-code-verifier", None)
+        self.session_set("gg-authorized", datetime.datetime.now() + datetime.timedelta(seconds=ACCESS_TIME_INTERNET))
+        msgLog("Google", "Authorized Google user \"" + gg_user_info["name"] + "\" [#" + gg_user_info["id"] + "]")
+        return None
+
+    def google_get_user_id(self):
+        return self.session_get("gg-user-info", {"id":0})["id"]
+
+    def google_get_user_name(self):
+        return self.session_get("gg-user-info", {"name":"Unknown"})["name"]
+    
 
     def get_file(self, name):
         # If route exists

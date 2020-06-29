@@ -11,8 +11,11 @@ A captive portal based on Python3 and IPtables. This is based on @nikosft's impl
  
 ### ToDo
  - Move configuration to other file
- - Add other SSO services
- - Monitor traffic during login (add cooldowns between unsuccessful logins)
+ - Add other login methods
+ 	- SQLite3 DB?
+ - Add other SSO services? (Any other)
+ - Add cooldowns between unsuccessful logins?
+ - Monitor traffic during login?
 
 ## Preview
 
