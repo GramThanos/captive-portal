@@ -42,8 +42,10 @@ SSL_KEY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'key.pem
 # openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365
 
 # SSO (Configuration has to be inside the sso_config.py file)
+SSO_FACEBOOK = True
 SSO_FACEBOOK_APP_ID = None
 SSO_FACEBOOK_APP_SECRET = None
+SSO_GOOGLE = True
 SSO_GOOGLE_CLIENT_ID = None
 SSO_GOOGLE_CLIENT_SECRET = None
 from sso_config import *
@@ -61,7 +63,7 @@ SSO_FACEBOOK_EXCLUDE_DOMAINS = [
 ]
 SSO_GOOGLE_EXCLUDE_DOMAINS = [
     "accounts.google.com",
-    "lh3.googleusercontent.com",
+    #"lh3.googleusercontent.com",
     "fonts.gstatic.com",
     "ssl.gstatic.com",
     "accounts.youtube.com",
@@ -95,6 +97,7 @@ ACCESS_TIME_GOOGLE_LOGIN = 2*60
 LOG_DEBUG = 0
 LOG_VERBOSE = 2
 LOG_NORMAL = 4
+#LOG_LEVEL = LOG_NORMAL
 LOG_LEVEL = LOG_NORMAL
 
 ''' Authorizations Monitor Daemon
@@ -355,6 +358,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
         # Print info
         msgLog("Portal", "Request " + path, LOG_VERBOSE)
+        msgLog("Portal", "User-Agent " + self.headers["User-Agent"], LOG_DEBUG)
         #print("url : " + rawUrl)
         #print("path : " + path)
 
@@ -365,8 +369,13 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
             if loggedin == "Facebook" or loggedin == "Google":
                 data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
             else:
+                # Check if webview (google does not allow login from webview)
+                isWebView = self.isWebView()
+                # Replace data
                 data = self.replace_keys_decode(data, {
+                    "facebook-btn-type" : ("btn-primary" if SSO_FACEBOOK else "d-none"),
                     "facebook-link" : "/facebook/init",
+                    "google-btn-type" : (("btn-secondary" if isWebView else "btn-primary") if SSO_GOOGLE else "d-none"),
                     "google-link" : "/google/init"
                 })
         # Logout page
@@ -404,11 +413,11 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 data, headers, status = self.do_redirect("/login", "<p>Redirecting...</p>")
 
         # Facebook - Pre-Oauth
-        elif path == '/facebook/init':
+        elif SSO_FACEBOOK and path == '/facebook/init':
             fb_redirect = self.facebook_pre_oauth()
             data, headers, status = self.do_redirect(fb_redirect, "<p>You have %d seconds to sign in...</p>" % ACCESS_TIME_FACEBOOK_LOGIN, 5)
         # Facebook - Post-Oauth
-        elif path == '/facebook/oauth':
+        elif SSO_FACEBOOK and path == '/facebook/oauth':
             fb_authcode = ''
             fb_state = ''
             if ('code' in parms.keys()) and ('state' in parms.keys()):
@@ -422,11 +431,21 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
 
         # Google - Pre-Oauth
-        elif path == '/google/init':
-            gg_redirect = self.google_pre_oauth()
-            data, headers, status = self.do_redirect(gg_redirect, "<p>You have %d seconds to sign in...</p>" % ACCESS_TIME_GOOGLE_LOGIN, 5)
+        elif SSO_GOOGLE and path == '/google/init':
+            if self.isWebView():
+                data, headers, status = self.do_message(
+                    "Failed",
+                    ("<p>This browser does not support Google sign in.<br>" +
+                    "Please open this page using an other browser (e.g. Chrome, Firefox)</p>" +
+                    "<input type=\"text\" value=\"%s\" style=\"text-align:center;\"><br><br>" +
+                    "<a href=\"%s\" class=\"btn btn-outline-primary\">&lt; Back</a>" +
+                    "") % (REMOTE_SERVER_LINK, REMOTE_SERVER_LINK)
+                )
+            else:
+                gg_redirect = self.google_pre_oauth()
+                data, headers, status = self.do_redirect(gg_redirect, "<p>You have %d seconds to sign in...</p>" % ACCESS_TIME_GOOGLE_LOGIN, 5)
         # Google - Post-Oauth
-        elif path == '/google/oauth':
+        elif SSO_GOOGLE and path == '/google/oauth':
             gg_code = ''
             gg_scope = ''
             if ('code' in parms.keys()) and ('scope' in parms.keys()):
@@ -596,6 +615,20 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     def google_get_user_name(self):
         return self.session_get("gg-user-info", {"name":"Unknown"})["name"]
+
+    def isWebView(self):
+        # Check requested with header
+        if ("X-Requested-With" in self.headers.keys()):
+            # Android Web View
+            if self.headers["X-Requested-With"] == "com.android.htmlviewer":
+                return True
+        # Check browser user agent
+        if ("User-Agent" in self.headers.keys()):
+            # Android Web View
+            if "; wv" in self.headers["User-Agent"]:
+                return True
+        # Probably not
+        return False
     
 
     def get_file(self, name):
