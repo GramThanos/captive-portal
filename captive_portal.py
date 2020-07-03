@@ -311,9 +311,9 @@ class AuthorizationsDaemon:
 class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     server_variables = {
-        "server_ip" : LOCAL_SERVER_IP,
-        "server_port" : HTTPS_SERVER_PORT,
-        "year" : datetime.datetime.now().year
+        "server-ip" : LOCAL_SERVER_IP,
+        "server-port" : HTTPS_SERVER_PORT,
+        "footer-note" : "&copy; Unipi " + str(datetime.datetime.now().year)
     }
 
     sessions = {}
@@ -436,7 +436,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 data, headers, status = self.do_message(
                     "Failed",
                     ("<p>This browser does not support Google sign in.<br>" +
-                    "Please open this page using an other browser (e.g. Chrome, Firefox)</p>" +
+                    "Please open this page using another browser (e.g. Chrome, Firefox)</p>" +
                     "<input type=\"text\" value=\"%s\" style=\"text-align:center;\"><br><br>" +
                     "<a href=\"%s\" class=\"btn btn-outline-primary\">&lt; Back</a>" +
                     "") % (REMOTE_SERVER_LINK, REMOTE_SERVER_LINK)
