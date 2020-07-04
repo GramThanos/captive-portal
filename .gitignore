@@ -1,3 +1,5 @@
 
 *.pem
 sso_config.py
+users.db
+users.db-journal
