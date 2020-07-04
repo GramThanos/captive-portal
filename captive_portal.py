@@ -14,6 +14,9 @@ import html
 import socket
 import dnslib
 import time
+import sqlite3
+import hashlib
+
 
 
 
@@ -81,6 +84,10 @@ for domain in SSO_GOOGLE_EXCLUDE_DOMAINS:
     if not (ip in SSO_GOOGLE_EXCLUDE_IPS):
         SSO_GOOGLE_EXCLUDE_IPS.append(ip)
 
+# Credentials Sign in
+CREDENTIALS_SIGNIN = True
+SQLITE3_DATABASE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'users.db')
+
 # Create remote link
 REMOTE_SERVER_LINK = "https://" + REMOTE_SERVER_DOMAIN + ":" + str(HTTPS_SERVER_PORT) + "/"
 if str(HTTPS_SERVER_PORT) == "443":
@@ -99,6 +106,67 @@ LOG_VERBOSE = 2
 LOG_NORMAL = 4
 #LOG_LEVEL = LOG_NORMAL
 LOG_LEVEL = LOG_NORMAL
+
+''' Database
+-----------------------------------'''
+database = None
+class Database:
+    def __init__(self):
+        # Init path
+        self.path = SQLITE3_DATABASE_PATH
+        # Try to connect to db
+        try:
+            self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        except sqlite3.Error as e:
+            self.conn = None
+            self.log("Error: " + str(e))
+            return;
+        # Create dummy password
+        self.dummy_pass = self.hash_password('dummy')
+        # Init users table
+        self.conn.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT)')
+        # Init tokens table
+        self.conn.execute('CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, seconds int)')
+
+    def createUser(self, username, password):
+        try:
+            self.conn.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', (username, self.hash_password(password)))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            self.log("Failed: " + str(e))
+            return False
+
+    def authenticateUser(self, username, password):
+        c = self.conn.cursor()
+        c.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
+        data = c.fetchone()
+        if not data or len(data) < 1:
+            # Dummy calculations to avoid time attack
+            self.verify_password(self.dummy_pass, 'invalid-dummy')
+            return False
+        else:
+            return self.verify_password(data[0], password)
+
+    # Hash a password for storing.
+    def hash_password(self, password, alg='sha512'):
+        salt = hashlib.sha256(os.urandom(60)).hexdigest().encode('ascii')
+        pwdhash = hashlib.pbkdf2_hmac(alg, password.encode('utf-8'), salt, 100000)
+        pwdhash = binascii.hexlify(pwdhash)
+        return (salt + pwdhash).decode('ascii')
+
+    # Verify a stored password against one provided by user
+    def verify_password(self, stored_password, provided_password, alg='sha512'):
+        salt = stored_password[:64]
+        stored_password = stored_password[64:]
+        pwdhash = hashlib.pbkdf2_hmac(alg, provided_password.encode('utf-8'), salt.encode('ascii'), 100000)
+        pwdhash = binascii.hexlify(pwdhash).decode('ascii')
+        return pwdhash == stored_password
+
+    def log(self, message, level = LOG_LEVEL):
+        msgLog("Database", message, level)
+
+
 
 ''' Authorizations Monitor Daemon
 -----------------------------------'''
@@ -335,13 +403,15 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
         # Other pages
         ".redirect": {"file": "redirect.html", "cached": False},
         ".message": {"file": "message.html", "cached": False},
+        ".credentials": {"file": "credentials.html", "cached": False},
+        ".terms": {"file": "ToU.txt", "cached": False},
     }
 
     route_alias = {
         "/": "/login"
     }
 
-    def get_route(self, rawUrl):
+    def get_route(self, method, rawUrl):
         # Analise URL
         url = urllib.parse.urlparse(rawUrl)
         parms = urllib.parse.parse_qs(url.query)
@@ -373,6 +443,9 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 isWebView = self.isWebView()
                 # Replace data
                 data = self.replace_keys_decode(data, {
+                    # CREDENTIALS_SIGNIN
+                    "credentials-btn-type" : ("btn-info" if CREDENTIALS_SIGNIN else "d-none"),
+                    "credentials-link" : "/credentials",
                     "facebook-btn-type" : ("btn-primary" if SSO_FACEBOOK else "d-none"),
                     "facebook-link" : "/facebook/init",
                     "google-btn-type" : (("btn-secondary" if isWebView else "btn-primary") if SSO_GOOGLE else "d-none"),
@@ -409,9 +482,63 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                     "refresh-link" : "/status",
                     "logout-link" : "/logout"
                 })
+            elif loggedin == "Credentials":
+                data = self.replace_keys_decode(data, {
+                    "title" : "Connected",
+                    "name" : html.escape(self.credentials_get_user_name()),
+                    "login-type" : "Credentials Login",
+                    "packets" : format(info["packets"],',d'),
+                    "bytes" : bytes_sizeof_format(info["bytes"]),
+                    "refresh-link" : "/status",
+                    "logout-link" : "/logout"
+                })
             else:
                 data, headers, status = self.do_redirect("/login", "<p>Redirecting...</p>")
 
+        # Credentials
+        elif CREDENTIALS_SIGNIN and path == '/credentials':
+            alert = {"type" : "d-none", "message" : ""}
+            authenticated = False
+            if method == 'POST':
+                form = self.parse_posted_data()
+                if form != None and not ('checkbox' in form.keys()):
+                    alert["type"] = "alert-danger"
+                    alert["message"] = "Please accept the terms"
+                elif form != None and ('username' in form.keys()) and ('password' in form.keys()):
+                    authenticated = database.authenticateUser(form['username'], form['password'])
+                    if authenticated:
+                        authenticated = form['username']
+                    else:
+                        alert["type"] = "alert-danger"
+                        alert["message"] = "Authentication failed"
+                else:
+                    alert["type"] = "alert-danger"
+                    alert["message"] = "Invalid data posted"
+            if not authenticated:
+                data = self.get_file(".credentials");
+                data = self.replace_keys_decode(data, {
+                    "action-link" : "credentials",
+                    "checkbox-class" : "", #"d-none",
+                    "checkbox-html" : 'Accept the <a href="/terms">Terms of Use</a>',
+                    # Alet info
+                    "alert-type" : alert["type"], #alert-danger
+                    "alert-message" : alert["message"],
+                })
+            else:
+                self.credentials_auth(authenticated)
+                self.authorize_internet()
+                data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
+
+        elif CREDENTIALS_SIGNIN and path == '/terms':
+            #headers = {"Content-type": "text/html; charset=UTF-8"}
+            txt = self.get_file(".terms").decode("utf-8");
+            data, headers, status = self.do_message(
+                "Terms of Use",
+                ("<p style=\"text-align: left;\">%s</p>" +
+                "<a href=\"%s\" class=\"btn btn-outline-primary\">&lt; Back</a>" +
+                "") % (html.escape(txt).replace("\n","<br>"), REMOTE_SERVER_LINK)
+            )
+        
         # Facebook - Pre-Oauth
         elif SSO_FACEBOOK and path == '/facebook/init':
             fb_redirect = self.facebook_pre_oauth()
@@ -428,7 +555,12 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 self.authorize_internet()
                 data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
             else:
-                data, headers, status = self.do_message("Failed", "<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" % html.escape(error))
+                data, headers, status = self.do_message(
+                    "Failed",
+                    ("<p>Failed to login with Facebook</p><p><small>Error: %s</small></p>" +
+                    "<a href=\"%s\" class=\"btn btn-outline-primary\">&lt; Back</a>" +
+                    "") % (html.escape(error), REMOTE_SERVER_LINK)
+                )
 
         # Google - Pre-Oauth
         elif SSO_GOOGLE and path == '/google/init':
@@ -456,9 +588,27 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                 self.authorize_internet()
                 data, headers, status = self.do_redirect("/status", "<p>Redirecting...</p>")
             else:
-                data, headers, status = self.do_message("Failed", "<p>Failed to login with Google</p><p><small>Error: %s</small></p>" % html.escape(error))
+                data, headers, status = self.do_message(
+                    "Failed",
+                    ("<p>Failed to login with Google</p><p><small>Error: %s</small></p>" +
+                    "<a href=\"%s\" class=\"btn btn-outline-primary\">&lt; Back</a>" +
+                    "") % (html.escape(error), REMOTE_SERVER_LINK)
+                )
 
         return data, headers, status;
+
+    def parse_posted_data(self):
+        data = None
+        if 'Content-Length' in self.headers.keys():
+            length = int(self.headers['Content-Length'])
+            body = self.rfile.read(length)
+            if 'Content-Type' in self.headers.keys():
+                if self.headers['Content-Type'] == "application/x-www-form-urlencoded":
+                    binary = urllib.parse.parse_qs(body)
+                    data = {}
+                    for key in binary.keys():
+                        data[key.decode('ascii')] = binary[key][0].decode('ascii')
+        return data
 
     def get_logged_in(self):
         if self.session_hasInternet():
@@ -471,15 +621,37 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
                         return "Facebook"
                 date = self.session_get("gg-authorized", datetime.datetime(1970, 1, 1))
                 if date > datetime.datetime.now():
-                    fb_user_info = self.session_get("gg-user-info", None)
-                    if (fb_user_info != None) and ("name" in fb_user_info.keys()):
+                    gg_user_info = self.session_get("gg-user-info", None)
+                    if (gg_user_info != None) and ("name" in gg_user_info.keys()):
                         return "Google"
+                date = self.session_get("cr-authorized", datetime.datetime(1970, 1, 1))
+                if date > datetime.datetime.now():
+                    cr_user_info = self.session_get("cr-user-info", None)
+                    if (cr_user_info != None) and ("name" in cr_user_info.keys()):
+                        return "Credentials"
         return None
 
     def set_logged_out(self):
         self.deauthorize_internet()
         self.facebook_deoauth()
         self.google_deoauth()
+        self.credentials_deoauth()
+
+    # Credentials
+    def credentials_auth(self, username):
+        user_info = {"name" : username}
+        # Save session data
+        self.session_set("cr-user-info", user_info)
+        self.session_set("cr-authorized", datetime.datetime.now() + datetime.timedelta(seconds=ACCESS_TIME_INTERNET))
+        msgLog("Credentials", "Authorized user \"" + user_info["name"] + "\"")
+        return None
+
+    def credentials_deoauth(self):
+        self.session_set("cr-user-info", None)
+        self.session_set("cr-authorized", datetime.datetime(1970, 1, 1))
+
+    def credentials_get_user_name(self):
+        return self.session_get("cr-user-info", {"name":"Unknown"})["name"]
 
     # Facebook Login
     def facebook_deoauth(self):
@@ -727,7 +899,7 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.session_init()
         # Get file
-        body, headers, status = self.get_route(self.path)
+        body, headers, status = self.get_route('GET', self.path)
         if body == None :
             self.send_response(404)
             self.send_header("Content-type", "text/html")
@@ -747,8 +919,25 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
 
     # Handle POST requests
     def do_POST(self):
-        # To do
-        pass
+        self.session_init()
+        # Get file
+        body, headers, status = self.get_route('POST', self.path)
+        if body == None :
+            self.send_response(404)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(str("404: file not found").encode())
+            return
+        # Path info
+        file_name, file_extension = os.path.splitext(self.path)
+        # Create headers
+        self.send_response(status)
+        self.send_header("Content-type", self.get_content_type(file_extension))
+        for key, value in headers.items():
+            self.send_header(key, value)
+        self.end_headers()
+        # Return file
+        self.wfile.write(body)
 
     def do_redirect(self, location, message, seconds = 0):
         #status = 302
@@ -799,7 +988,7 @@ class RedirectPortal(CaptivePortal):
         ".message": {"file": "message.html", "cached": False},
     }
 
-    def get_route(self, rawUrl):
+    def get_route(self, method, rawUrl):
         # Analise URL
         url = urllib.parse.urlparse(rawUrl)
         path = url.path
@@ -820,7 +1009,7 @@ class RedirectPortal(CaptivePortal):
     # Handle GET requests
     def do_GET(self):
         # Get file
-        body, headers, status = self.get_route(self.path)
+        body, headers, status = self.get_route('GET', self.path)
         if body == None :
             self.send_response(404)
             self.send_header("Content-type", "text/html")
@@ -839,7 +1028,24 @@ class RedirectPortal(CaptivePortal):
         self.wfile.write(body)
 
     def do_POST(self):
-        self.do_GET()
+        # Get file
+        body, headers, status = self.get_route('POST', self.path)
+        if body == None :
+            self.send_response(404)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(str("404: file not found").encode())
+            return
+        # Path info
+        file_name, file_extension = os.path.splitext(self.path)
+        # Create headers
+        self.send_response(status)
+        self.send_header("Content-type", self.get_content_type(file_extension))
+        for key, value in headers.items():
+            self.send_header(key, value)
+        self.end_headers()
+        # Return file
+        self.wfile.write(body)
 
 
 
@@ -946,6 +1152,15 @@ def server_https():
         pass
     server.server_close()
 
+def database_init():
+    if CREDENTIALS_SIGNIN == True:
+        global database
+        msgLog("Database", "Initializing database")
+        database = Database()
+        # Create Users Example
+        #database.createUser('test', 'test')
+        #database.createUser('unipi', 'unipi')
+
 def iptables_reset():
     if IPTABLES_RESET == True:
         msgLog("iptables", "Reseting iptables")
@@ -1004,6 +1219,8 @@ if __name__ == '__main__':
     if os.getuid() != 0:
         msgLog("Portal", "Need to run with root rights")
     else:
+        # Set up database
+        database_init()
         # Set up iptables
         iptables_reset()
         iptables_init()
