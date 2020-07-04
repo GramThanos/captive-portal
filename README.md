@@ -9,11 +9,13 @@ A captive portal based on Python3 and IPtables. This is based on @nikosft's impl
  - Facebook SSO login
  - Load HTML and assets from files (routes defined in the code)
  
-### ToDo
+### Future ToDo
  - Move configuration to other file
- - Add other login methods
- 	- SQLite3 DB?
- - Add other SSO services? (Any other)
+ - Write tutorial
+ - Add CSRF tokens
+ - Add token login method
+ - Add admin panel / console commands
+ - Add other SSO services? (Any other?)
  - Add cooldowns between unsuccessful logins?
  - Monitor traffic during login?
 
