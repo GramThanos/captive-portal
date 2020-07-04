@@ -5,9 +5,16 @@ A captive portal based on Python3 and IPtables. This is based on @nikosft's impl
 ![img](https://raw.githubusercontent.com/GramThanos/captive-portal/master/pages/img/portal.png)
 
 ## Features
- - HTTPS Captive Portal using a No-IP domain and Let's encrypt SSL certificate
- - Facebook SSO login
+ - HTTPS Captive Portal
+    - No-IP domain
+    - Let's encrypt SSL certificate
+ - Login Methods
+    - Credentials login (SQLite3)
+    - Facebook SSO login
+    - Google SSO login
  - Load HTML and assets from files (routes defined in the code)
+ - MAC Address Change detection
+ - Timed Internet Access
  
 ### Future ToDo
  - Move configuration to other file
