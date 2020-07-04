@@ -126,7 +126,7 @@ class Database:
         # Init users table
         self.conn.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT)')
         # Init tokens table
-        self.conn.execute('CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, seconds int)')
+        #self.conn.execute('CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, seconds int)')
 
     def createUser(self, username, password):
         try:
