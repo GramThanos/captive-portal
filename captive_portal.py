@@ -74,14 +74,16 @@ SSO_GOOGLE_EXCLUDE_DOMAINS = [
 SSO_GOOGLE_EXCLUDE_IPS = []
 SSO_FACEBOOK_EXCLUDE_IPS = []
 # Turn domains to server IPs
-for domain in SSO_FACEBOOK_EXCLUDE_DOMAINS:
-    ip = socket.gethostbyname(domain)
-    if not (ip in SSO_FACEBOOK_EXCLUDE_IPS):
-        SSO_FACEBOOK_EXCLUDE_IPS.append(ip)
-for domain in SSO_GOOGLE_EXCLUDE_DOMAINS:
-    ip = socket.gethostbyname(domain)
-    if not (ip in SSO_GOOGLE_EXCLUDE_IPS):
-        SSO_GOOGLE_EXCLUDE_IPS.append(ip)
+if SSO_FACEBOOK:
+    for domain in SSO_FACEBOOK_EXCLUDE_DOMAINS:
+        ip = socket.gethostbyname(domain)
+        if not (ip in SSO_FACEBOOK_EXCLUDE_IPS):
+            SSO_FACEBOOK_EXCLUDE_IPS.append(ip)
+if SSO_GOOGLE:
+    for domain in SSO_GOOGLE_EXCLUDE_DOMAINS:
+        ip = socket.gethostbyname(domain)
+        if not (ip in SSO_GOOGLE_EXCLUDE_IPS):
+            SSO_GOOGLE_EXCLUDE_IPS.append(ip)
 
 # Credentials Sign in
 CREDENTIALS_SIGNIN = True
