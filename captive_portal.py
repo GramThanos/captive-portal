@@ -87,6 +87,7 @@ if str(HTTPS_SERVER_PORT) == "443":
 
 # Authorizations Daemon
 AUTHDAEMON_INTERVAL_CHECK = 10
+AUTHDAEMON_MAC_CHANGE_CHECK = True
 
 # Access Times
 ACCESS_TIME_INTERNET = 2*60*60
@@ -192,7 +193,7 @@ class AuthorizationsDaemon:
             # If client was previously logged
             if ip in self.clients.keys() and self.clients[ip]["mac"] != None:
                 # Check if MAC matches previous MAC
-                if self.clients[ip]["mac"] != mac:
+                if AUTHDAEMON_MAC_CHANGE_CHECK != False and self.clients[ip]["mac"] != mac:
                     self.log("MAC change detected on " + ip + " : " + self.clients[ip]["mac"] + " --> " + mac)
                     # De-authorize client
                     self.clients[ip]["mac"] = None
@@ -1175,7 +1176,7 @@ def iptables_reset():
 def iptables_init():
     if IPTABLES_INIT == True:
         msgLog("iptables", "Initializing iptables")
-        # Allow DNS
+        # Allow DNS if not custom DNS
         if not USE_CUSTOM_DNS_SERVER:
             callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", "53", "-j" , "ACCEPT"])
             callCmd(["iptables", "-A", "FORWARD", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", "53", "-j" , "ACCEPT"])
