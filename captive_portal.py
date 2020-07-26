@@ -64,26 +64,17 @@ SSO_FACEBOOK_EXCLUDE_DOMAINS = [
     "static.xx.fbcdn.net"
 ]
 SSO_GOOGLE_EXCLUDE_DOMAINS = [
-    "accounts.google.com",
-    #"lh3.googleusercontent.com",
+    #"accounts.google.com",
+    #"accounts.google.gr",
+    "lh3.googleusercontent.com",
     "fonts.gstatic.com",
     "ssl.gstatic.com",
     "accounts.youtube.com",
     "play.google.com"
 ]
+SSO_GOOGLE_EXCLUDE_DOMAINS_COUNTRIES = ['.com', '.ac', '.ad', '.ae', '.com.af', '.com.ag', '.com.ai', '.al', '.am', '.co.ao', '.com.ar', '.as', '.at', '.com.au', '.az', '.ba', '.com.bd', '.be', '.bf', '.bg', '.com.bh', '.bi', '.bj', '.com.bn', '.com.bo', '.com.br', '.bs', '.bt', '.co.bw', '.by', '.com.bz', '.ca', '.com.kh', '.cc', '.cd', '.cf', '.cat', '.cg', '.ch', '.ci', '.co.ck', '.cl', '.cm', '.cn', '.com.co', '.co.cr', '.com.cu', '.cv', '.com.cy', '.cz', '.de', '.dj', '.dk', '.dm', '.com.do', '.dz', '.com.ec', '.ee', '.com.eg', '.es', '.com.et', '.fi', '.com.fj', '.fm', '.fr', '.ga', '.ge', '.gf', '.gg', '.com.gh', '.com.gi', '.gl', '.gm', '.gp', '.gr', '.com.gt', '.gy', '.com.hk', '.hn', '.hr', '.ht', '.hu', '.co.id', '.iq', '.ie', '.co.il', '.im', '.co.in', '.io', '.is', '.it', '.je', '.com.jm', '.jo', '.co.jp', '.co.ke', '.ki', '.kg', '.co.kr', '.com.kw', '.kz', '.la', '.com.lb', '.com.lc', '.li', '.lk', '.co.ls', '.lt', '.lu', '.lv', '.com.ly', '.co.ma', '.md', '.me', '.mg', '.mk', '.ml', '.com.mm', '.mn', '.ms', '.com.mt', '.mu', '.mv', '.mw', '.com.mx', '.com.my', '.co.mz', '.com.na', '.ne', '.com.nf', '.com.ng', '.com.ni', '.nl', '.no', '.com.np', '.nr', '.nu', '.co.nz', '.com.om', '.com.pk', '.com.pa', '.com.pe', '.com.ph', '.pl', '.com.pg', '.pn', '.com.pr', '.ps', '.pt', '.com.py', '.com.qa', '.ro', '.rs', '.ru', '.rw', '.com.sa', '.com.sb', '.sc', '.se', '.com.sg', '.sh', '.si', '.sk', '.com.sl', '.sn', '.sm', '.so', '.st', '.sr', '.com.sv', '.td', '.tg', '.co.th', '.com.tj', '.tk', '.tl', '.tm', '.to', '.tn', '.com.tr', '.tt', '.com.tw', '.co.tz', '.com.ua', '.co.ug', '.co.uk', '.com', '.com.uy', '.co.uz', '.com.vc', '.co.ve', '.vg', '.co.vi', '.com.vn', '.vu', '.ws', '.co.za', '.co.zm', '.co.zw']
 SSO_GOOGLE_EXCLUDE_IPS = []
 SSO_FACEBOOK_EXCLUDE_IPS = []
-# Turn domains to server IPs
-if SSO_FACEBOOK:
-    for domain in SSO_FACEBOOK_EXCLUDE_DOMAINS:
-        ip = socket.gethostbyname(domain)
-        if not (ip in SSO_FACEBOOK_EXCLUDE_IPS):
-            SSO_FACEBOOK_EXCLUDE_IPS.append(ip)
-if SSO_GOOGLE:
-    for domain in SSO_GOOGLE_EXCLUDE_DOMAINS:
-        ip = socket.gethostbyname(domain)
-        if not (ip in SSO_GOOGLE_EXCLUDE_IPS):
-            SSO_GOOGLE_EXCLUDE_IPS.append(ip)
 
 # Credentials Sign in
 CREDENTIALS_SIGNIN = True
@@ -1203,6 +1194,42 @@ def iptables_init():
             callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "tcp", "--dport", str(53), "-j", "DNAT", "--to-destination",  LOCAL_DNS_SERVER_IP + ":" + str(DNS_SERVER_PORT)])
             callCmd(["iptables", "-t", "nat", "-A",  "PREROUTING", "-i", INTERFACE_INPUT, "-p", "udp", "--dport", str(53), "-j", "DNAT", "--to-destination",  LOCAL_DNS_SERVER_IP + ":" + str(DNS_SERVER_PORT)])
 
+def sso_init():
+    global SSO_FACEBOOK_EXCLUDE_DOMAINS, SSO_FACEBOOK_EXCLUDE_IPS, SSO_GOOGLE_EXCLUDE_DOMAINS, SSO_GOOGLE_EXCLUDE_DOMAINS_COUNTRIES,SSO_GOOGLE_EXCLUDE_IPS
+    # Turn facebook domains to server IPs
+    if SSO_FACEBOOK:
+        msgLog("SSO", "Loading Facebook IPs ...")
+        for domain in SSO_FACEBOOK_EXCLUDE_DOMAINS:
+            try:
+                ip = socket.gethostbyname(domain)
+            except socket.gaierror:
+                ip = None
+            if ip != None:
+                if not (ip in SSO_FACEBOOK_EXCLUDE_IPS):
+                    SSO_FACEBOOK_EXCLUDE_IPS.append(ip)
+        msgLog("SSO", "Found " + str(len(SSO_FACEBOOK_EXCLUDE_IPS)) + " Facebook IPs")
+    # Turn google domains to server IPs
+    if SSO_GOOGLE:
+        msgLog("SSO", "Loading Google IPs ...")
+        for domain in SSO_GOOGLE_EXCLUDE_DOMAINS:
+            try:
+                ip = socket.gethostbyname(domain)
+            except socket.gaierror:
+                ip = None
+            if ip != None:
+                if not (ip in SSO_GOOGLE_EXCLUDE_IPS):
+                    SSO_GOOGLE_EXCLUDE_IPS.append(ip)
+        for toplevel in SSO_GOOGLE_EXCLUDE_DOMAINS_COUNTRIES:
+            try:
+                ip = socket.gethostbyname('accounts.google' + toplevel)
+            except socket.gaierror:
+                ip = None
+            if ip != None:
+                if not (ip in SSO_GOOGLE_EXCLUDE_IPS):
+                    SSO_GOOGLE_EXCLUDE_IPS.append(ip)
+        msgLog("SSO", "Found " + str(len(SSO_GOOGLE_EXCLUDE_IPS)) + " Google IPs")
+
+
 # Start Monitor Daemon
 def start_auth_daemon():
     global authDaemon
@@ -1231,6 +1258,8 @@ if __name__ == '__main__':
         # Set up iptables
         iptables_reset()
         iptables_init()
+        # SSO init
+        sso_init()
         # Monitor Daemon
         start_auth_daemon()
         # Start Server
