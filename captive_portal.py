@@ -807,6 +807,8 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
     def get_file(self, name):
         # If route exists
         if name in self.route.keys():
+            if self.route[name]["cached"] == None:
+                return self.load_file(self.route[name]["file"])
             # If not cached
             if self.route[name]["cached"] == False:
                 self.route[name]["cached"] = self.load_file(self.route[name]["file"])
