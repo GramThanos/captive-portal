@@ -12,7 +12,6 @@ import urllib
 import json
 import html
 import socket
-import dnslib
 import time
 import sqlite3
 import hashlib
