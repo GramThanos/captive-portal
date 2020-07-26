@@ -857,6 +857,10 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
             return "image/svg+xml"
         elif ext == ".ico" :
             return "image/x-icon"
+        elif ext == ".txt" :
+            return "text/plain"
+        elif ext == ".crt" :
+            return "application/x-x509-ca-cert"
         return "text/html"
 
     def session_init(self):
