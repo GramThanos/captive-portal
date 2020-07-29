@@ -27,7 +27,10 @@ LOCAL_SERVER_IP = "192.168.20.1"
 HTTP_SERVER_PORT = 80
 HTTPS_SERVER_PORT = 443
 REMOTE_SERVER_DOMAIN = "captive.ddns.net"
-REMOTE_SERVER_IP = socket.gethostbyname(REMOTE_SERVER_DOMAIN)
+try:
+    REMOTE_SERVER_IP = socket.gethostbyname(REMOTE_SERVER_DOMAIN)
+except socket.gaierror:
+    REMOTE_SERVER_IP = LOCAL_SERVER_IP
 # Interfaces
 INTERFACE_INPUT = "wlan0"
 INTERFACE_OUTPUT = "eth0"
