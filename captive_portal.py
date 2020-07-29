@@ -3,6 +3,7 @@ import http.server
 import subprocess
 import cgi
 import os
+import sys
 import datetime
 import binascii
 import re
@@ -365,7 +366,7 @@ class AuthorizationsDaemon:
         msgLog("AuthDaemon", message, level)
 
 
-            
+
 
 
 ''' HTTPS Captive Portal (Main Captive Portal)
@@ -1000,7 +1001,7 @@ class RedirectPortal(CaptivePortal):
         status = 200
 
         # Get file
-        data = self.get_file(path);
+        data = self.get_file(path)
 
         # If file not found
         if data == None:
@@ -1248,6 +1249,7 @@ def auth_daemon_interval():
 def msgLog(stype, message, level = LOG_NORMAL):
     if level >= LOG_LEVEL:
         print("[%s] %s" % (stype, message))
+        sys.stdout.flush()
 
 
 ''' Script Start
