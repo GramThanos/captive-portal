@@ -857,6 +857,8 @@ class CaptivePortal(http.server.BaseHTTPRequestHandler):
             return "text/plain"
         elif ext == ".crt" :
             return "application/x-x509-ca-cert"
+        elif ext == ".pdf" :
+            return "application/pdf"
         return "text/html"
 
     def session_init(self):
